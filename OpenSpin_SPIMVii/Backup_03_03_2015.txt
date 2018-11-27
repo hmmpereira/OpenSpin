@@ -1,0 +1,3485 @@
+package SPIM_FLUID;
+
+
+import mmcorej.CMMCore;
+import mmcorej.TaggedImage;
+import mmcorej.StrVector;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+import java.text.DecimalFormat;
+import java.text.NumberFormat;
+import SPIM_FLUID.SPIMFLUID_controlsDialog;
+import java.awt.Color;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
+import org.micromanager.acquisition.AcquisitionEngine;
+import org.micromanager.MMStudio;
+import org.micromanager.MainFrame;
+import org.micromanager.api.ScriptInterface;
+import org.micromanager.utils.MDUtils;
+import org.json.JSONArray;
+import org.json.JSONObject;
+import org.json.JSONException;
+import org.micromanager.acquisition.DefaultTaggedImageSink;
+import org.micromanager.api.*;
+import ij.*; //macro runner
+import ij.macro.MacroRunner;
+
+import org.jdesktop.swingx.*;
+import org.jdesktop.layout.*;
+
+import org.jdesktop.beans.*;
+
+import java.text.NumberFormat;
+
+import org.json.JSONObject;
+import org.micromanager.utils.MDUtils;
+import org.micromanager.utils.NumberUtils;
+
+public class acquisition {
+         private CMMCore core_;                 
+         private SPIMFLUID_controlsDialog dialog_;
+         private AcquisitionEngine acq_;
+         private MMStudio app_;       
+         
+        private ShutterControl ShC_;
+        private FilterControl FC_;
+        private RotationControl2 RC_;
+        //private StagePosition sp_;
+ 
+   public acquisition(CMMCore core, SPIMFLUID_controlsDialog dialog, AcquisitionEngine acq, ScriptInterface app, ShutterControl ShC, FilterControl FC, RotationControl2 RC){  
+    core_ = core;
+    dialog_=dialog;
+    acq_=acq;
+    app_=(MMStudio) app;
+    ShC_=ShC;
+    FC_=FC;
+    RC_=RC;
+    }
+    
+          
+     String Configure (){   
+        
+         String Mode="tonto";
+  //////////////// Mode Configuration  /////////////  
+         Mode=(String) dialog_.ModeComboBox.getSelectedItem();
+         
+         return Mode;
+     }
+          
+String DSLM (){   
+         
+        acq_.clear();    
+        app_.closeAllAcquisitions();
+
+        int numFrames=1;
+        int slices=1;
+        int channels=1;
+        int positions=1;
+            
+        String focusdevice=(String) dialog_.StageMotorComboBox.getSelectedItem();
+        String xyStage = core_.getXYStageDevice();
+        core_.setAutoShutter(false);
+
+        //////////// This is only to detect the Focus device position property!!!! ///////
+        // IF appears in metadata this can be deleted ////
+       StrVector devicePropertyNames;  
+       String position_property="";
+       NumberFormat formatter2 = new DecimalFormat("#.####");
+        try {
+            devicePropertyNames = core_.getDevicePropertyNames(focusdevice);
+     
+             for(int x=0;x<devicePropertyNames.size();x++){
+                 if (!core_.isPropertyReadOnly(focusdevice, devicePropertyNames.get(x))){
+                        String property_value = core_.getProperty(focusdevice, devicePropertyNames.get(x));
+                        String Position=formatter2.format(core_.getPosition(focusdevice)).replaceAll(",", ".");
+                        if (property_value.compareTo(Position)==0){ position_property=devicePropertyNames.get(x);}
+                        dialog_.MessageTextArea.setText(property_value+"  "+Position + devicePropertyNames.get(x));                    
+                                       }
+             }      
+           } catch (Exception ex) {
+            Logger.getLogger(SPIMFLUID_controlsDialog.class.getName()).log(Level.SEVERE, null, ex);
+             dialog_.MessageTextArea.setText("Error in device detection");
+        }
+
+
+/////////////// Mode Configuration  /////////////        
+        
+ String Mode=(String) dialog_.ModeComboBox.getSelectedItem();    
+ 
+ 
+
+///////////   Save Files Configuration //////////////             
+        String Filename="test";
+        String Rootname=dialog_.RootDirectoryField.getText();
+        boolean issaved=false;
+        
+        if(dialog_.SaveCheckBox.isSelected()){
+            Rootname=dialog_.RootDirectoryField.getText();
+            Filename=dialog_.FileNameField.getText();
+            dialog_.MessageTextArea.setText(Rootname+"\\" +Filename);
+            
+            issaved=true;
+            
+            acq_.setDirName(Filename);
+            acq_.setRootName(Rootname);
+            acq_.setSaveFiles(true);
+            acq_.setComment(dialog_.MessageTextArea.getText());
+        }
+
+//////////  Sample Rotation Configuration  ///////////   
+   String RotPosition=dialog_.AnglePositionField.getText();
+   String RotStep=(String)dialog_.RotationComboBox.getSelectedItem();
+   String Delay_OPT=dialog_.DelayField.getText();
+  
+   long delay_OPT=Long.parseLong(Delay_OPT);
+   
+   if ("DSLM/SPIM".equals(Mode)){     
+        if(dialog_.ShutterRotationCheckBox.isSelected()==true){
+            acq_.keepShutterOpenForChannels(false);
+        }
+        else{acq_.keepShutterOpenForChannels(true);
+        }
+        float RStep=Float.parseFloat(RotStep);
+        positions=1;
+        if (RStep==0){positions=1;}
+        else {positions =(int) ((int) 360/RStep);}
+   } 
+ 
+///////////////  Stack Configuration  //////////////////   
+     
+        NumberFormat formatter = new DecimalFormat("#.0000");
+        double ZINI=0;
+        double ZSTEP=0.5;
+        double time=10;
+        
+   if ("DSLM/SPIM".equals(Mode)){
+        double bottom=Double.parseDouble(dialog_.StartField.getText().replaceAll(",", "."));
+        double top=Double.parseDouble(dialog_.EndField.getText().replaceAll(",", "."));
+        double step=Double.parseDouble(dialog_.StepField.getText().replaceAll(",", "."));
+        boolean absolute=true;
+        String ZStep=dialog_.StepField.getText();
+        ZSTEP=Double.parseDouble(ZStep.replaceAll(",", "."));
+        String ZIni=dialog_.StartField.getText();
+        ZINI=Double.parseDouble(ZIni.replaceAll(",", "."));
+        acq_.enableZSliceSetting(false);
+        //ss.slicesFirst=false;
+       
+        if(dialog_.ShutterStackCheckBox.isSelected()==true){acq_.keepShutterOpenForStack(false);
+        //ss.keepShutterOpenSlices=false;
+        }
+        else{
+            acq_.keepShutterOpenForStack(true);
+        //ss.keepShutterOpenSlices=true;
+        }
+        
+        if (dialog_.StackCheckBox.isSelected()){
+            acq_.enableZSliceSetting(true);
+            //ss.slicesFirst=true;
+            acq_.setSlices(bottom,top,step,absolute);
+           // ArrayList a = new ArrayList();
+           // a.set(0, bottom);a.set(1, top);a.set(2, step);a.set(3, absolute);
+           // ss.slices=a;
+                    //ss.
+                                   
+            double aux=(top-bottom)/step;
+            slices=(int)Math.ceil(aux)+1;
+            ZIni=dialog_.StartField.getText();
+            ZINI=Double.parseDouble(ZIni.replaceAll(",", "."));
+        }
+        else{
+            //acq_.setSingleFrame(true);//
+            acq_.enableZSliceSetting(false);
+            //acq_.setSlices(bottom,bottom,step,absolute);
+            slices=1;
+            ZIni=dialog_.PositionField.getText();
+            ZINI=Double.parseDouble(ZIni.replaceAll(",", "."));
+        }   
+   }
+     else if ("Continous".equals(Mode)){
+        double bottom=Double.parseDouble(dialog_.StartField.getText().replaceAll(",", "."));
+        double top=Double.parseDouble(dialog_.EndField.getText().replaceAll(",", "."));
+        double step=Double.parseDouble(dialog_.StepField.getText().replaceAll(",", "."));
+        time=Double.parseDouble(dialog_.TotalTimeField.getText().replaceAll(",", "."));
+        boolean absolute=true;
+        String ZStep=dialog_.StepField.getText();
+        ZSTEP=Double.parseDouble(ZStep.replaceAll(",", "."));
+        String ZIni=dialog_.StartField.getText();
+        ZINI=Double.parseDouble(ZIni.replaceAll(",", "."));
+        acq_.enableZSliceSetting(false);
+       
+        if(dialog_.ShutterStackCheckBox.isSelected()==true){acq_.keepShutterOpenForStack(false);}
+        else{acq_.keepShutterOpenForStack(true);}
+        
+        if (dialog_.StackCheckBox.isSelected()){
+            acq_.enableZSliceSetting(true);
+            acq_.setSlices(bottom,top,step,absolute);
+                                   
+            double aux=(top-bottom)/step;
+            slices=(int)Math.ceil(aux)+1;
+            ZIni=dialog_.StartField.getText();
+            ZINI=Double.parseDouble(ZIni.replaceAll(",", "."));
+        }
+        else{
+            //acq_.setSingleFrame(true);//
+            acq_.enableZSliceSetting(false);
+            //acq_.setSlices(bottom,bottom,step,absolute);
+            slices=1;
+            ZIni=dialog_.PositionField.getText();
+            ZINI=Double.parseDouble(ZIni.replaceAll(",", "."));
+        }   
+   }
+  else if ("OPT".equals(Mode)){
+        if(dialog_.ShutterRotationCheckBox.isSelected()==true){acq_.keepShutterOpenForChannels(false);}
+        else{acq_.keepShutterOpenForChannels(true);}
+        float RStep=Float.parseFloat(RotStep);
+        slices=1;
+        if (RStep==0){slices=1;}
+        else {slices =(int) ((int) 360/RStep);}
+        dialog_.MessageTextArea.setText("Slices are: "+Integer.toString(slices));
+        core_.sleep(2000);
+  }
+
+   
+////////////////  Time Lapse Configuration  ////////////////////   
+        Object numFramesS=dialog_.TimeFrames.getValue();
+        numFrames=((Integer) numFramesS).intValue();
+        double interval=Double.parseDouble(dialog_.IntervalTime.getText());
+        String units=(String)dialog_.IntervalUnits.getSelectedItem();
+        acq_.enableFramesSetting(false);
+        double intervalms=0;
+        
+        if (dialog_.TimeLapseCheckBox.isSelected()){
+            //acq_.setSingleFrame(false);
+            acq_.enableFramesSetting(true);
+           if ("s".equals(units)) {intervalms=interval*1000;}
+           else if ("min".equals(units)) {intervalms=interval*60000;}
+           else if ("ms".equals(units)) {intervalms=interval;}            
+            acq_.setFrames(numFrames,intervalms);
+        }
+        else{
+            numFrames=1;
+            acq_.enableFramesSetting(true);
+            acq_.setFrames(numFrames,interval);
+            //acq_.setSingleFrame(true);
+        }
+                      
+//////////// Channels configuration    /////////////////// 
+       String channelname[] = new String[6];
+       String Excitation[] = new String[6];
+       String Emission[] = new String[6];
+       String Exposure[] = new String[6];
+       String Excitation_filters[]= new String[6];
+       String Emission_filters[]= new String[6];
+       
+       for(int n=0;n<6;n++){
+                Excitation_filters[n]=(String)dialog_.Excitation_ComboBox.getItemAt(n);
+                Emission_filters[n]=(String)dialog_.Emission_ComboBox.getItemAt(n);
+                    }
+        if (dialog_.Channel_CheckBox.isSelected()){
+            channels=0;
+                for(int n=0;n<6;n++){
+                    if(((Boolean)dialog_.Channels_table.getValueAt(n, 4)).booleanValue()==true){                           
+                        channelname[channels]=(String)dialog_.Channels_table.getValueAt(n, 0);
+                        Excitation[channels]=(String)dialog_.Channels_table.getValueAt(n, 1);
+                        Emission[channels]=(String)dialog_.Channels_table.getValueAt(n, 2);                       
+                        Exposure[channels]=(String)dialog_.Channels_table.getValueAt(n, 3);
+                        channels=channels+1;                         
+                    }               
+                }
+            dialog_.MessageTextArea.setText("Number of channels is"+Integer.toString(channels));
+            
+        }
+        else{
+             channels=1;
+             channelname[0] = "Channel_0";
+            try {               
+                Exposure[0]=Double.toString(core_.getExposure());
+            } catch (Exception ex) {
+                dialog_.MessageTextArea.setText("ERROR IN GETTING EXPOSURE");
+                Logger.getLogger(SPIMFLUID_controlsDialog.class.getName()).log(Level.SEVERE, null, ex);
+            }
+             Excitation[0]=(String)dialog_.Excitation_ComboBox.getSelectedItem();
+             Emission[0]=(String)dialog_.Emission_ComboBox.getSelectedItem();            
+        }
+   
+          
+         
+////////////////  ACQUISITION IN DSLM/SPIM Mode //////////////////                  
+    if ("DSLM/SPIM".equals(Mode)){
+            try {
+                boolean isshown=true; 
+
+                app_.openAcquisition(Filename, Rootname, numFrames, channels, slices, positions, isshown, issaved);
+
+   /////////////////////  RENAME CHANNELS  //////////////////
+                
+        int[] Excitation_Filters_Index={0,0,0,0,0,0};
+        int[] Emission_Filters_Index={0,0,0,0,0,0};
+               for(int n=0;n<channels;n++){                     
+                        app_.setChannelName(Filename, n, channelname[n]);
+                                                  
+                     for(int m=0;m<6;m++){
+                                if(Excitation_filters[m].equalsIgnoreCase(Excitation[n])){
+                                    Excitation_Filters_Index[n]=m;
+                                }
+                                 if(Emission_filters[m].equalsIgnoreCase(Emission[n])){
+                                    Emission_Filters_Index[n]=m;
+                                }
+                       }  
+            }
+            
+
+//////////////////////  ACQUIRE  /////////////////////////////////////
+                
+               
+            //String Pos;
+            //Pos=SC_.setPos(ZIni);
+        try {
+           core_.setPosition(focusdevice,ZINI);
+           core_.sleep(100);
+           String Position_new=formatter.format(core_.getPosition(focusdevice));
+           dialog_.PositionField.setText(Position_new);
+        } catch (Exception ex) {
+            Logger.getLogger(SPIMFLUID_controlsDialog.class.getName()).log(Level.SEVERE, null, ex);
+            dialog_.MessageTextArea.setText("ERROR IN GOING TO INITIAL POSITION");
+        }
+            long TIni;
+            long TEnd;
+            long TotalT;
+            long Intervalms=(long)intervalms;
+                       
+       for (int n=0;n<(numFrames);n++){
+                TIni=System.currentTimeMillis();            
+                   if (Global.shutter==0){ShC_.openshutter(); Global.shutter=1;}
+                    for(int m=0;m<(positions);m++){
+                        if (Global.shutter==0){ShC_.openshutter(); Global.shutter=1;}
+                for (int o=0; o<(channels);o++){
+                          
+                   if (dialog_.Channel_CheckBox.isSelected()){
+                        //Change filter
+                          String CIEx=FC_.ChangeExcitationFilter(Excitation_Filters_Index[o]);
+                          dialog_.Excitation_ComboBox.setSelectedIndex(Excitation_Filters_Index[o]);
+                          String CIEm=FC_.ChangeEmissionFilter(Emission_Filters_Index[o]);
+                          dialog_.Emission_ComboBox.setSelectedIndex(Emission_Filters_Index[o]);                           
+                         try {
+                            core_.setExposure(Double.parseDouble(Exposure[o]));
+                        } catch (Exception ex) {
+                            dialog_.MessageTextArea.setText("ERROR IN SETTING EXPOSURE");
+                            Logger.getLogger(SPIMFLUID_controlsDialog.class.getName()).log(Level.SEVERE, null, ex);
+                        }
+                          dialog_.MessageTextArea.setText("The filter is: "+Integer.toString(Emission_Filters_Index[o]+1)+"/n"+"The CIEm is: "+ CIEm);
+                          //core_.sleep(1000); 
+                   }
+                   
+                        for(int l=0;l<(slices);l++){
+                            if (dialog_.ShutterStackCheckBox.isSelected()==true){ShC_.openshutter();Global.shutter=1;dialog_.MessageTextArea.setText("shutter ON");}  
+                            else{dialog_.MessageTextArea.setText("shutter OFF");}
+                            if(app_.acquisitionExists(Filename)){
+                                    app_.snapAndAddImage(Filename, n, o, l, m);  //n,m,l
+                            }
+                            else {n=numFrames;m=positions;l=slices;}
+                                if(l!=slices-1){
+                                    if (dialog_.ShutterStackCheckBox.isSelected()==true){ShC_.closeshutter();Global.shutter=0;}
+                                    try {
+                                        double position = core_.getPosition(focusdevice); 
+                                        double position_new=position+ZSTEP;
+                                       
+                                        String Position_new0=Double.toString(position_new).replace(",",".");//
+                                        dialog_.MessageTextArea.setText(Position_new0);
+
+                                       ///position_property="Set position (microns)";
+                                       // core_.setProperty(focusdevice,position_property,Position_new0);//
+                                        
+                                        //core_.sleep(50);//
+                                        core_.setPosition(focusdevice,position_new);
+                                        String Position_new=formatter.format(core_.getPosition(focusdevice));
+                                        dialog_.PositionField.setText(Position_new);
+                                      // app_.setStagePosition(position_new);
+                                        } catch (Exception ex) {
+                                            Logger.getLogger(SPIMFLUID_controlsDialog.class.getName()).log(Level.SEVERE, null, ex);
+                                            dialog_.MessageTextArea.setText("ERROR IN MOVING");
+                                        }
+                                }
+
+                            }
+                        
+                         try {
+                            core_.setPosition(focusdevice,ZINI);
+                            core_.sleep(100);
+                             String Position_new=formatter.format(core_.getPosition(focusdevice));
+                            dialog_.PositionField.setText(Position_new);
+                        } catch (Exception ex) {
+                             Logger.getLogger(SPIMFLUID_controlsDialog.class.getName()).log(Level.SEVERE, null, ex);
+                        }
+                } //channels
+                        if(positions>1){ShC_.openshutter();Global.shutter=1;}
+                       
+                        RotPosition=RC_.leftMove(RotStep,RotPosition);                        
+                        dialog_.AnglePositionField.setText(RotPosition);
+                         if(dialog_.ShutterRotationCheckBox.isSelected()==true){ShC_.closeshutter();Global.shutter=0;}
+                        }
+                    
+                    TEnd=System.currentTimeMillis();
+                    TotalT=TEnd-TIni;
+                    dialog_.MessageTextArea.setText(String.valueOf(TotalT));
+                   if (dialog_.StackCheckBox.isSelected()==true){ShC_.closeshutter();Global.shutter=0;dialog_.MessageTextArea.setText("shutter OFF");}
+                   if (dialog_.ShutterRotationCheckBox.isSelected()==true){ShC_.closeshutter();Global.shutter=0;dialog_.MessageTextArea.setText("shutter OFF");}
+                   else if(dialog_.ShutterRotationCheckBox.isSelected()==false){ShC_.openshutter();Global.shutter=1;dialog_.MessageTextArea.setText("shutter ON");}
+                   if (TotalT<Intervalms && n!=(numFrames-1)){
+                            app_.sleep(Intervalms-TotalT);
+                        }
+                    //wait until
+                   
+                    }
+                ShC_.closeshutter();Global.shutter=0;dialog_.MessageTextArea.setText("shutter OFF");
+                app_.closeAcquisition(Filename);
+                FC_.ChangeExcitationFilter(Excitation_Filters_Index[0]);
+                dialog_.Excitation_ComboBox.setSelectedIndex(Excitation_Filters_Index[0]);
+                FC_.ChangeEmissionFilter(Emission_Filters_Index[0]);
+                dialog_.Emission_ComboBox.setSelectedIndex(Emission_Filters_Index[0]);
+            
+            } catch (Exception ex) {
+                Logger.getLogger(SPIMFLUID_controlsDialog.class.getName()).log(Level.SEVERE, null, ex);
+                dialog_.MessageTextArea.setText("Error in DSLM/SPIM Mode");
+            }
+        }//END IF
+
+        return Mode;
+     }
+     
+String VERTICAL (){   
+         
+        acq_.clear();    
+        app_.closeAllAcquisitions();
+        //acq_.setSaveFiles(false);    
+        
+        //ss.save=false;
+   
+        int numFrames=1;
+        int slices=1;
+        int channels=1;
+        int positions=1;
+            
+        //focusdevice=core_.getFocusDevice();
+        String focusdevice=(String) dialog_.StageMotorComboBox.getSelectedItem();
+        String xyStage = core_.getXYStageDevice();
+        core_.setAutoShutter(false);
+
+        //////////// This is only to detect the Focus device position property!!!! ///////
+        // IF appears in metadata this can be deleted ////
+       StrVector devicePropertyNames;  
+       String position_property="";
+       NumberFormat formatter2 = new DecimalFormat("#.####");
+        try {
+            devicePropertyNames = core_.getDevicePropertyNames(focusdevice);
+     
+             for(int x=0;x<devicePropertyNames.size();x++){
+                 if (!core_.isPropertyReadOnly(focusdevice, devicePropertyNames.get(x))){
+                //double position = core_.getPosition(focusdevice);
+                String property_value = core_.getProperty(focusdevice, devicePropertyNames.get(x));
+                String Position=formatter2.format(core_.getPosition(focusdevice)).replaceAll(",", ".");
+               if (property_value.compareTo(Position)==0){ position_property=devicePropertyNames.get(x);}
+               dialog_.MessageTextArea.setText(property_value+"  "+Position + devicePropertyNames.get(x));
+              //core_.sleep(5000);                      
+                                       }
+             }      
+           } catch (Exception ex) {
+            Logger.getLogger(SPIMFLUID_controlsDialog.class.getName()).log(Level.SEVERE, null, ex);
+             dialog_.MessageTextArea.setText("Error in device detection");
+        }
+
+
+/////////////// Mode Configuration  /////////////        
+        
+ String Mode=(String) dialog_.ModeComboBox.getSelectedItem();    
+ 
+ 
+
+///////////   Save Files Configuration //////////////             
+        String Filename="test";
+        //String Rootname="D:\\DSLM_DATA\\SPIM_V10";
+        String Rootname=dialog_.RootDirectoryField.getText();
+        boolean issaved=false;
+        
+        if(dialog_.SaveCheckBox.isSelected()){
+            Rootname=dialog_.RootDirectoryField.getText();
+            Filename=dialog_.FileNameField.getText();
+            dialog_.MessageTextArea.setText(Rootname+"\\" +Filename);
+            
+            issaved=true;
+            
+            acq_.setDirName(Filename);
+            acq_.setRootName(Rootname);
+            acq_.setSaveFiles(true);
+            acq_.setComment(dialog_.MessageTextArea.getText());
+            //ss.prefix=Filename;
+            //ss.root=Rootname;
+            //ss.save=true;
+            //ss.comment=dialog_.MessageTextArea.getText();
+        }
+
+//////////  Sample Rotation Configuration  ///////////   
+   String RotPosition=dialog_.AnglePositionField.getText();
+   String RotStep=(String)dialog_.RotationComboBox.getSelectedItem();
+   String Delay_OPT=dialog_.DelayField.getText();
+  
+   long delay_OPT=Long.parseLong(Delay_OPT);
+   
+   if ("SPIM_VERTICAL".equals(Mode)){     
+        if(dialog_.ShutterRotationCheckBox.isSelected()==true){
+            acq_.keepShutterOpenForChannels(false);
+            //ss.keepShutterOpenChannels=true;
+        }
+        else{acq_.keepShutterOpenForChannels(true);
+        
+            //ss.keepShutterOpenChannels=true;
+        }
+        float RStep=Float.parseFloat(RotStep);// parsedouble(RotStep);
+        positions=1;
+        if (RStep==0){positions=1;}
+        else {positions =(int) ((int) 360/RStep);}
+   } 
+
+   
+
+///////////////  Stack Configuration  //////////////////   
+     
+        NumberFormat formatter = new DecimalFormat("#.0000");
+        double ZINI=0;
+        double ZSTEP=0.5;
+        double time=10;
+        double Gstep=0;
+        double Gamp=2;
+        
+   if ("SPIM_VERTICAL".equals(Mode)){
+        double bottom=Double.parseDouble(dialog_.StartField.getText().replaceAll(",", "."));
+        double top=Double.parseDouble(dialog_.EndField.getText().replaceAll(",", "."));
+        double step=Double.parseDouble(dialog_.StepField.getText().replaceAll(",", "."));
+        boolean absolute=true;
+        String ZStep=dialog_.StepField.getText();
+        ZSTEP=Double.parseDouble(ZStep.replaceAll(",", "."));
+        String ZIni=dialog_.StartField.getText();
+        ZINI=Double.parseDouble(ZIni.replaceAll(",", "."));
+        acq_.enableZSliceSetting(false);
+
+        
+
+        if(dialog_.ShutterStackCheckBox.isSelected()==true){
+            acq_.keepShutterOpenForStack(false);     
+        }
+        else{
+            acq_.keepShutterOpenForStack(true);
+        }
+        
+        if (dialog_.StackCheckBox.isSelected()){
+            acq_.enableZSliceSetting(true);
+
+            acq_.setSlices(bottom,top,step,absolute);
+
+                                   
+            double aux=(top-bottom)/step;
+            slices=(int)Math.ceil(aux)+1;
+            ZIni=dialog_.StartField.getText();
+            ZINI=Double.parseDouble(ZIni.replaceAll(",", "."));
+        }
+        else{
+            //acq_.setSingleFrame(true);//
+            acq_.enableZSliceSetting(false);
+            //acq_.setSlices(bottom,bottom,step,absolute);
+            slices=1;
+            ZIni=dialog_.PositionField.getText();
+            ZINI=Double.parseDouble(ZIni.replaceAll(",", "."));
+        }   
+        
+        ///definitions for galvo 
+        Gamp=Global.GampINI-Global.GampEND;
+       //String AMP=dialog_.GAmpTextField.getText();
+       //Gamp=Double.parseDouble(AMP);
+       Gstep=Gamp/slices;  
+   }
+
+
+   
+////////////////  Time Lapse Configuration  ////////////////////   
+        Object numFramesS=dialog_.TimeFrames.getValue();
+        numFrames=((Integer) numFramesS).intValue();
+        double interval=Double.parseDouble(dialog_.IntervalTime.getText());
+        String units=(String)dialog_.IntervalUnits.getSelectedItem();
+        acq_.enableFramesSetting(false);
+        double intervalms=0;
+        
+        if (dialog_.TimeLapseCheckBox.isSelected()){
+            //acq_.setSingleFrame(false);
+            acq_.enableFramesSetting(true);
+           if ("s".equals(units)) {intervalms=interval*1000;}
+           else if ("min".equals(units)) {intervalms=interval*60000;}
+           else if ("ms".equals(units)) {intervalms=interval;}            
+            acq_.setFrames(numFrames,intervalms);
+        }
+        else{
+            numFrames=1;
+            acq_.enableFramesSetting(true);
+            acq_.setFrames(numFrames,interval);
+            //acq_.setSingleFrame(true);
+        }
+                      
+//////////// Channels configuration    /////////////////// 
+       String channelname[] = new String[6];
+       String Excitation[] = new String[6];
+       String Emission[] = new String[6];
+       String Exposure[] = new String[6];
+       String Excitation_filters[]= new String[6];
+       String Emission_filters[]= new String[6];
+       
+       for(int n=0;n<6;n++){
+                Excitation_filters[n]=(String)dialog_.Excitation_ComboBox.getItemAt(n);
+                Emission_filters[n]=(String)dialog_.Emission_ComboBox.getItemAt(n);
+                    }
+        if (dialog_.Channel_CheckBox.isSelected()){
+            channels=0;
+                for(int n=0;n<6;n++){
+                    if(((Boolean)dialog_.Channels_table.getValueAt(n, 4)).booleanValue()==true){                           
+                        channelname[channels]=(String)dialog_.Channels_table.getValueAt(n, 0);
+                        Excitation[channels]=(String)dialog_.Channels_table.getValueAt(n, 1);
+                        Emission[channels]=(String)dialog_.Channels_table.getValueAt(n, 2);                       
+                        Exposure[channels]=(String)dialog_.Channels_table.getValueAt(n, 3);
+                        channels=channels+1;                         
+                    }               
+                }
+            dialog_.MessageTextArea.setText("Number of channels is"+Integer.toString(channels));
+            
+        }
+        else{
+             channels=1;
+             channelname[0] = "Channel_0";
+            try {               
+                Exposure[0]=Double.toString(core_.getExposure());
+            } catch (Exception ex) {
+                dialog_.MessageTextArea.setText("ERROR IN GETTING EXPOSURE");
+                Logger.getLogger(SPIMFLUID_controlsDialog.class.getName()).log(Level.SEVERE, null, ex);
+            }
+             Excitation[0]=(String)dialog_.Excitation_ComboBox.getSelectedItem();
+             Emission[0]=(String)dialog_.Emission_ComboBox.getSelectedItem();            
+        }
+   
+          
+         
+////////////////  ACQUISITION IN DSLM/SPIM Mode //////////////////                  
+    if ("SPIM_VERTICAL".equals(Mode)){
+            try {
+                boolean isshown=true; 
+                app_.openAcquisition(Filename, Rootname, numFrames, channels, slices, positions, isshown, issaved);
+
+   /////////////////////  RENAME CHANNELS  //////////////////
+                
+        int[] Excitation_Filters_Index={0,0,0,0,0,0};
+        int[] Emission_Filters_Index={0,0,0,0,0,0};
+               for(int n=0;n<channels;n++){                     
+                        app_.setChannelName(Filename, n, channelname[n]);
+                                                  
+                     for(int m=0;m<6;m++){
+                                if(Excitation_filters[m].equalsIgnoreCase(Excitation[n])){
+                                    Excitation_Filters_Index[n]=m;
+                                }
+                                 if(Emission_filters[m].equalsIgnoreCase(Emission[n])){
+                                    Emission_Filters_Index[n]=m;
+                                }
+                       }  
+            }
+            
+
+//////////////////////  ACQUIRE  /////////////////////////////////////
+                
+
+            long TIni;
+            long TEnd;
+            long TotalT;
+            long Intervalms=(long)intervalms;
+                       
+       for (int n=0;n<(numFrames);n++){
+        
+           
+                TIni=System.currentTimeMillis();            
+                   if (Global.shutter==0){ShC_.openshutter(); Global.shutter=1;}
+                    for(int m=0;m<(positions);m++){
+        
+        double Gamp_old=Global.GampINI;
+        double Gamp_new=Global.GampINI;                                            
+        double freq=0;
+        
+        String GAMP=Double.toString(Gamp_new);
+        try {
+           core_.setPosition(focusdevice,ZINI);
+           core_.sleep(100);
+           String Position_new=formatter.format(core_.getPosition(focusdevice));
+           dialog_.PositionField.setText(Position_new);
+           dialog_.MessageTextArea.setText(GAMP);
+
+            
+            try {
+                    core_.setProperty("Arduino_SR-Switch","State","16");
+                    // core_.setProperty("Arduino_SR-Shutter","OnOff","1");
+                    // core_.setProperty("Arduino_SR-Shutter","OnOff","0");
+                    core_.setProperty("Arduino_GM-DAC1","Volts",Global.GampINI);
+                    core_.setProperty("Arduino_GM-DAC1","Frequency",freq); 
+                    //ShC_.openshutter();
+
+                    //Global.shutter=1;
+                    } catch (Exception ex) {
+                         Logger.getLogger(SPIMFLUID_controlsDialog.class.getName()).log(Level.SEVERE, null, ex);
+                         dialog_.MessageTextArea.setText("ERROR IN GALVO");
+                    }
+
+        } catch (Exception ex) {
+            Logger.getLogger(SPIMFLUID_controlsDialog.class.getName()).log(Level.SEVERE, null, ex);
+            dialog_.MessageTextArea.setText("ERROR IN GOING TO INITIAL POSITION");
+        }                      
+                        if (Global.shutter==0){ShC_.openshutter(); Global.shutter=1;}
+                for (int o=0; o<(channels);o++){
+                          //Change filter
+                          String CIEx=FC_.ChangeExcitationFilter(Excitation_Filters_Index[o]);
+                          dialog_.Excitation_ComboBox.setSelectedIndex(Excitation_Filters_Index[o]);
+                          String CIEm=FC_.ChangeEmissionFilter(Emission_Filters_Index[o]);
+                          dialog_.Emission_ComboBox.setSelectedIndex(Emission_Filters_Index[o]);                           
+                         try {
+                            core_.setExposure(Double.parseDouble(Exposure[o]));
+                        } catch (Exception ex) {
+                            dialog_.MessageTextArea.setText("ERROR IN SETTING EXPOSURE");
+                            Logger.getLogger(SPIMFLUID_controlsDialog.class.getName()).log(Level.SEVERE, null, ex);
+                        }
+                          dialog_.MessageTextArea.setText("The filter is: "+Integer.toString(Emission_Filters_Index[o]+1)+"/n"+"The CIEm is: "+ CIEm);
+                          //core_.sleep(1000); 
+                          
+                        for(int l=0;l<(slices);l++){
+                            if (dialog_.ShutterStackCheckBox.isSelected()==true){ShC_.openshutter();Global.shutter=1;
+                            //dialog_.MessageTextArea.setText("shutter ON");
+                            }  
+                            else{dialog_.MessageTextArea.setText("shutter OFF");}
+                            if(app_.acquisitionExists(Filename)){
+                                    app_.snapAndAddImage(Filename, n, o, l, m);  //n,m,l
+                            }
+                            else {n=numFrames;m=positions;l=slices;}
+                                if(l!=slices-1){
+                                    if (dialog_.ShutterStackCheckBox.isSelected()==true){ShC_.closeshutter();Global.shutter=0;}
+                                    try {
+                                        double position = core_.getPosition(focusdevice); 
+                                        double position_new=position+ZSTEP;
+                                       
+                                        String Position_new0=Double.toString(position_new).replace(",",".");//
+                                        //dialog_.MessageTextArea.setText(Position_new0);
+
+                                        core_.setPosition(focusdevice,position_new);
+                                        String Position_new=formatter.format(core_.getPosition(focusdevice));
+                                       
+                                            Gamp_new=Gamp_old-Gstep;                                            
+                                            freq=0;
+                                           GAMP=Double.toString(Gamp_old);
+                                            dialog_.PositionField.setText(Position_new);
+                                            dialog_.MessageTextArea.setText(GAMP);
+                                            core_.sleep(50);
+                                                try {
+                                                    core_.setProperty("Arduino_SR-Switch","State","16");
+                                                   // core_.setProperty("Arduino_SR-Shutter","OnOff","1");
+                                                   // core_.setProperty("Arduino_SR-Shutter","OnOff","0");
+                                                    core_.setProperty("Arduino_GM-DAC1","Volts",Gamp_new);
+                                                    core_.setProperty("Arduino_GM-DAC1","Frequency",freq); 
+                                                    //ShC_.openshutter();
+
+                                                    //Global.shutter=1;
+                                                Gamp_old=Gamp_new;
+                                                } catch (Exception ex) {
+                                                    Logger.getLogger(SPIMFLUID_controlsDialog.class.getName()).log(Level.SEVERE, null, ex);
+                                                    dialog_.MessageTextArea.setText("ERROR IN GALVO");
+                                                }
+                                        
+                                        
+
+                                        } catch (Exception ex) {
+                                            Logger.getLogger(SPIMFLUID_controlsDialog.class.getName()).log(Level.SEVERE, null, ex);
+                                            dialog_.MessageTextArea.setText("ERROR IN MOVING");
+                                        }
+                                }
+
+                            }
+                        
+                         try {
+                            core_.setPosition(focusdevice,ZINI);
+                            core_.sleep(100);
+                             String Position_new=formatter.format(core_.getPosition(focusdevice));
+                            dialog_.PositionField.setText(Position_new);
+                            
+                                                                        
+                            freq=0;
+                            try {
+                                 core_.setProperty("Arduino_SR-Switch","State","16");
+                                 // core_.setProperty("Arduino_SR-Shutter","OnOff","1");
+                                 // core_.setProperty("Arduino_SR-Shutter","OnOff","0");
+                                 core_.setProperty("Arduino_GM-DAC1","Volts",Global.GampINI);
+                                 core_.setProperty("Arduino_GM-DAC1","Frequency",freq); 
+                                 //ShC_.openshutter();
+
+                                 //Global.shutter=1;
+                                                
+                                 } catch (Exception ex) {
+                                  Logger.getLogger(SPIMFLUID_controlsDialog.class.getName()).log(Level.SEVERE, null, ex);
+                                  dialog_.MessageTextArea.setText("ERROR IN GALVO");
+                                  }
+                            
+                        } catch (Exception ex) {
+                             Logger.getLogger(SPIMFLUID_controlsDialog.class.getName()).log(Level.SEVERE, null, ex);
+                        }
+                } //channels
+                        if(positions>1){ShC_.openshutter();Global.shutter=1;}
+                       
+                        RotPosition=RC_.leftMove(RotStep,RotPosition);                        
+                        dialog_.AnglePositionField.setText(RotPosition);
+                         if(dialog_.ShutterRotationCheckBox.isSelected()==true){ShC_.closeshutter();Global.shutter=0;}
+                        }
+                    
+                    TEnd=System.currentTimeMillis();
+                    TotalT=TEnd-TIni;
+                    dialog_.MessageTextArea.setText(String.valueOf(TotalT));
+                   if (dialog_.StackCheckBox.isSelected()==true){ShC_.closeshutter();Global.shutter=0;dialog_.MessageTextArea.setText("shutter OFF");}
+                   if (dialog_.ShutterRotationCheckBox.isSelected()==true){ShC_.closeshutter();Global.shutter=0;dialog_.MessageTextArea.setText("shutter OFF");}
+                   else if(dialog_.ShutterRotationCheckBox.isSelected()==false){ShC_.openshutter();Global.shutter=1;dialog_.MessageTextArea.setText("shutter ON");}
+                   if (TotalT<Intervalms && n!=(numFrames-1)){
+                            ShC_.closeshutter();Global.shutter=0;dialog_.MessageTextArea.setText("shutter OFF");
+                             app_.sleep(Intervalms-TotalT);
+                            
+                        }
+                    //wait until
+                   
+                    }
+                ShC_.closeshutter();Global.shutter=0;dialog_.MessageTextArea.setText("shutter OFF");
+                app_.closeAcquisition(Filename);
+                FC_.ChangeExcitationFilter(Excitation_Filters_Index[0]);
+                dialog_.Excitation_ComboBox.setSelectedIndex(Excitation_Filters_Index[0]);
+                FC_.ChangeEmissionFilter(Emission_Filters_Index[0]);
+                dialog_.Emission_ComboBox.setSelectedIndex(Emission_Filters_Index[0]);
+            
+            } catch (Exception ex) {
+                Logger.getLogger(SPIMFLUID_controlsDialog.class.getName()).log(Level.SEVERE, null, ex);
+                dialog_.MessageTextArea.setText("Error in DSLM/SPIM Mode");
+            }
+        }//END IF
+
+        return Mode;
+     }
+
+  
+String Fluo (){   
+         
+        acq_.clear();    
+        app_.closeAllAcquisitions();
+        //acq_.setSaveFiles(false);    
+        
+        //ss.save=false;
+   
+        int numFrames=1;
+        int slices=1;
+        int channels=1;
+        int positions=1;
+            
+        String focusdevice=core_.getFocusDevice();
+        String xyStage = core_.getXYStageDevice();
+        core_.setAutoShutter(false);
+
+        //////////// This is only to detect the Focus device position property!!!! ///////
+        // IF appears in metadata this can be deleted ////
+       StrVector devicePropertyNames;  
+       String position_property="";
+       NumberFormat formatter2 = new DecimalFormat("#.####");
+        try {
+            devicePropertyNames = core_.getDevicePropertyNames(focusdevice);
+     
+             for(int x=0;x<devicePropertyNames.size();x++){
+                 if (!core_.isPropertyReadOnly(focusdevice, devicePropertyNames.get(x))){
+                //double position = core_.getPosition(focusdevice);
+                String property_value = core_.getProperty(focusdevice, devicePropertyNames.get(x));
+                String Position=formatter2.format(core_.getPosition(focusdevice)).replaceAll(",", ".");
+               if (property_value.compareTo(Position)==0){ position_property=devicePropertyNames.get(x);}
+               dialog_.MessageTextArea.setText(property_value+"  "+Position + devicePropertyNames.get(x));
+              //core_.sleep(5000);                      
+                                       }
+             }      
+           } catch (Exception ex) {
+            Logger.getLogger(SPIMFLUID_controlsDialog.class.getName()).log(Level.SEVERE, null, ex);
+             dialog_.MessageTextArea.setText("Error in device detection");
+        }
+
+
+/////////////// Mode Configuration  /////////////        
+        
+ String Mode=(String) dialog_.ModeComboBox.getSelectedItem();    
+ 
+ 
+
+///////////   Save Files Configuration //////////////             
+        String Filename="test";
+        //String Rootname="D:\\DSLM_DATA\\SPIM_V10";
+        String Rootname=dialog_.RootDirectoryField.getText();
+        boolean issaved=false;
+        
+        if(dialog_.SaveCheckBox.isSelected()){
+            Rootname=dialog_.RootDirectoryField.getText();
+            Filename=dialog_.FileNameField.getText();
+            dialog_.MessageTextArea.setText(Rootname+"\\" +Filename);
+            
+            issaved=true;
+            
+            acq_.setDirName(Filename);
+            acq_.setRootName(Rootname);
+            acq_.setSaveFiles(true);
+            acq_.setComment(dialog_.MessageTextArea.getText());
+            //ss.prefix=Filename;
+            //ss.root=Rootname;
+            //ss.save=true;
+            //ss.comment=dialog_.MessageTextArea.getText();
+        }
+
+//////////  Sample Rotation Configuration  ///////////   
+   String RotPosition=dialog_.AnglePositionField.getText();
+   String RotStep=(String)dialog_.RotationComboBox.getSelectedItem();
+   String Delay_OPT=dialog_.DelayField.getText();
+  
+   long delay_OPT=Long.parseLong(Delay_OPT);
+   if ("DSLM/SPIM".equals(Mode)){     
+        if(dialog_.ShutterRotationCheckBox.isSelected()==true){
+            acq_.keepShutterOpenForChannels(false);
+            //ss.keepShutterOpenChannels=true;
+        }
+        else{acq_.keepShutterOpenForChannels(true);
+        
+            //ss.keepShutterOpenChannels=true;
+        }
+        float RStep=Float.parseFloat(RotStep);// parsedouble(RotStep);
+        positions=1;
+        if (RStep==0){positions=1;}
+        else {positions =(int) ((int) 360/RStep);}
+   } 
+     else if ("Continous".equals(Mode)){     
+        if(dialog_.ShutterRotationCheckBox.isSelected()==true){acq_.keepShutterOpenForChannels(false);}
+        else{acq_.keepShutterOpenForChannels(true);}
+        float RStep=Float.parseFloat(RotStep);// parsedouble(RotStep);
+        positions=1;
+        if (RStep==0){positions=1;}
+        else {positions =(int) ((int) 360/RStep);}
+   } 
+     else if ("OPT".equals(Mode)){
+         dialog_.MessageTextArea.setText("OPT Mode");
+  
+  }
+   
+
+///////////////  Stack Configuration  //////////////////   
+     
+        NumberFormat formatter = new DecimalFormat("#.0000");
+        double ZINI=0;
+        double ZSTEP=0.5;
+        double time=10;
+        
+   if ("DSLM/SPIM".equals(Mode)){
+        double bottom=Double.parseDouble(dialog_.StartField.getText().replaceAll(",", "."));
+        double top=Double.parseDouble(dialog_.EndField.getText().replaceAll(",", "."));
+        double step=Double.parseDouble(dialog_.StepField.getText().replaceAll(",", "."));
+        boolean absolute=true;
+        String ZStep=dialog_.StepField.getText();
+        ZSTEP=Double.parseDouble(ZStep.replaceAll(",", "."));
+        String ZIni=dialog_.StartField.getText();
+        ZINI=Double.parseDouble(ZIni.replaceAll(",", "."));
+        acq_.enableZSliceSetting(false);
+        //ss.slicesFirst=false;
+       
+        if(dialog_.ShutterStackCheckBox.isSelected()==true){acq_.keepShutterOpenForStack(false);
+        //ss.keepShutterOpenSlices=false;
+        }
+        else{
+            acq_.keepShutterOpenForStack(true);
+        //ss.keepShutterOpenSlices=true;
+        }
+        
+        if (dialog_.StackCheckBox.isSelected()){
+            acq_.enableZSliceSetting(true);
+            //ss.slicesFirst=true;
+            acq_.setSlices(bottom,top,step,absolute);
+           // ArrayList a = new ArrayList();
+           // a.set(0, bottom);a.set(1, top);a.set(2, step);a.set(3, absolute);
+           // ss.slices=a;
+                    //ss.
+                                   
+            double aux=(top-bottom)/step;
+            slices=(int)Math.ceil(aux)+1;
+            ZIni=dialog_.StartField.getText();
+            ZINI=Double.parseDouble(ZIni.replaceAll(",", "."));
+        }
+        else{
+            //acq_.setSingleFrame(true);//
+            acq_.enableZSliceSetting(false);
+            //acq_.setSlices(bottom,bottom,step,absolute);
+            slices=1;
+            ZIni=dialog_.PositionField.getText();
+            ZINI=Double.parseDouble(ZIni.replaceAll(",", "."));
+        }   
+   }
+     else if ("Continous".equals(Mode)){
+        double bottom=Double.parseDouble(dialog_.StartField.getText().replaceAll(",", "."));
+        double top=Double.parseDouble(dialog_.EndField.getText().replaceAll(",", "."));
+        double step=Double.parseDouble(dialog_.StepField.getText().replaceAll(",", "."));
+        time=Double.parseDouble(dialog_.TotalTimeField.getText().replaceAll(",", "."));
+        boolean absolute=true;
+        String ZStep=dialog_.StepField.getText();
+        ZSTEP=Double.parseDouble(ZStep.replaceAll(",", "."));
+        String ZIni=dialog_.StartField.getText();
+        ZINI=Double.parseDouble(ZIni.replaceAll(",", "."));
+        acq_.enableZSliceSetting(false);
+       
+        if(dialog_.ShutterStackCheckBox.isSelected()==true){acq_.keepShutterOpenForStack(false);}
+        else{acq_.keepShutterOpenForStack(true);}
+        
+        if (dialog_.StackCheckBox.isSelected()){
+            acq_.enableZSliceSetting(true);
+            acq_.setSlices(bottom,top,step,absolute);
+                                   
+            double aux=(top-bottom)/step;
+            slices=(int)Math.ceil(aux)+1;
+            ZIni=dialog_.StartField.getText();
+            ZINI=Double.parseDouble(ZIni.replaceAll(",", "."));
+        }
+        else{
+            //acq_.setSingleFrame(true);//
+            acq_.enableZSliceSetting(false);
+            //acq_.setSlices(bottom,bottom,step,absolute);
+            slices=1;
+            ZIni=dialog_.PositionField.getText();
+            ZINI=Double.parseDouble(ZIni.replaceAll(",", "."));
+        }   
+   }
+  else if ("OPT".equals(Mode)){
+        if(dialog_.ShutterRotationCheckBox.isSelected()==true){acq_.keepShutterOpenForChannels(false);}
+        else{acq_.keepShutterOpenForChannels(true);}
+        float RStep=Float.parseFloat(RotStep);
+        slices=1;
+        if (RStep==0){slices=1;}
+        else {slices =(int) ((int) 360/RStep);}
+        dialog_.MessageTextArea.setText("Slices are: "+Integer.toString(slices));
+        core_.sleep(2000);
+  }
+
+   
+   /////DEFINITION OF SLICES TEMPORAL!!!!!
+       String ZStep=dialog_.StepField.getText();
+       slices=Integer.parseInt(ZStep.replaceAll(",", "."));
+   
+       
+////////////////  Time Lapse Configuration  ////////////////////   
+        Object numFramesS=dialog_.TimeFrames.getValue();
+        numFrames=((Integer) numFramesS).intValue();
+        double interval=Double.parseDouble(dialog_.IntervalTime.getText());
+        String units=(String)dialog_.IntervalUnits.getSelectedItem();
+        acq_.enableFramesSetting(false);
+        double intervalms=0;
+        
+        if (dialog_.TimeLapseCheckBox.isSelected()){
+            //acq_.setSingleFrame(false);
+            acq_.enableFramesSetting(true);
+           if ("s".equals(units)) {intervalms=interval*1000;}
+           else if ("min".equals(units)) {intervalms=interval*60000;}
+           else if ("ms".equals(units)) {intervalms=interval;}            
+            acq_.setFrames(numFrames,intervalms);
+        }
+        else{
+            numFrames=1;
+            acq_.enableFramesSetting(true);
+            acq_.setFrames(numFrames,interval);
+            //acq_.setSingleFrame(true);
+        }
+                      
+//////////// Channels configuration    /////////////////// 
+       String channelname[] = new String[6];
+       String Excitation[] = new String[6];
+       String Emission[] = new String[6];
+       String Exposure[] = new String[6];
+       String Excitation_filters[]= new String[6];
+       String Emission_filters[]= new String[6];
+       
+       for(int n=0;n<6;n++){
+                Excitation_filters[n]=(String)dialog_.Excitation_ComboBox.getItemAt(n);
+                Emission_filters[n]=(String)dialog_.Emission_ComboBox.getItemAt(n);
+                    }
+        if (dialog_.Channel_CheckBox.isSelected()){
+            channels=0;
+                for(int n=0;n<6;n++){
+                    if(((Boolean)dialog_.Channels_table.getValueAt(n, 4)).booleanValue()==true){                           
+                        channelname[channels]=(String)dialog_.Channels_table.getValueAt(n, 0);
+                        Excitation[channels]=(String)dialog_.Channels_table.getValueAt(n, 1);
+                        Emission[channels]=(String)dialog_.Channels_table.getValueAt(n, 2);                       
+                        Exposure[channels]=(String)dialog_.Channels_table.getValueAt(n, 3);
+                        channels=channels+1;                         
+                    }               
+                }
+            dialog_.MessageTextArea.setText("Number of channels is"+Integer.toString(channels));
+            
+        }
+        else{
+             channels=1;
+             channelname[0] = "Channel_0";
+            try {               
+                Exposure[0]=Double.toString(core_.getExposure());
+            } catch (Exception ex) {
+                dialog_.MessageTextArea.setText("ERROR IN GETTING EXPOSURE");
+                Logger.getLogger(SPIMFLUID_controlsDialog.class.getName()).log(Level.SEVERE, null, ex);
+            }
+             Excitation[0]=(String)dialog_.Excitation_ComboBox.getSelectedItem();
+             Emission[0]=(String)dialog_.Emission_ComboBox.getSelectedItem();            
+        }
+   
+//////  Position configuration ///////////////////
+        
+        
+        PositionList pl=new PositionList();;
+        try {
+            pl = app_.getPositionList();
+            app_.setPositionList(pl);
+            positions=pl.getNumberOfPositions();
+           String posString=Integer.toString(positions);
+            dialog_.MessageTextArea.setText("Num pos"+posString);
+        } catch (Exception ex) {
+            Logger.getLogger(SPIMFLUID_controlsDialog.class.getName()).log(Level.SEVERE, null, ex);
+            dialog_.MessageTextArea.setText("ERROR IN POSITION LIST");
+        }
+        
+         
+////////////////  ACQUISITION IN DSLM/SPIM Mode //////////////////                  
+    if ("FLUID".equals(Mode)){
+            try {
+                boolean isshown=true; 
+                app_.openAcquisition(Filename, Rootname, numFrames, channels, slices, positions, isshown, issaved);
+
+   /////////////////////  RENAME CHANNELS  //////////////////
+                
+        int[] Excitation_Filters_Index={0,0,0,0,0,0};
+        int[] Emission_Filters_Index={0,0,0,0,0,0};
+               for(int n=0;n<channels;n++){                     
+                        app_.setChannelName(Filename, n, channelname[n]);
+                                                  
+                     for(int m=0;m<6;m++){
+                                if(Excitation_filters[m].equalsIgnoreCase(Excitation[n])){
+                                    Excitation_Filters_Index[n]=m;
+                                }
+                                 if(Emission_filters[m].equalsIgnoreCase(Emission[n])){
+                                    Emission_Filters_Index[n]=m;
+                                }
+                       }  
+            }
+            
+   
+//////////////////////  ACQUIRE  /////////////////////////////////////
+                
+               
+            //String Pos;
+            //Pos=SC_.setPos(ZIni);
+        try {
+           core_.setPosition(focusdevice,ZINI);
+           core_.sleep(100);
+           String Position_new=formatter.format(core_.getPosition(focusdevice));
+           dialog_.PositionField.setText(Position_new);
+        } catch (Exception ex) {
+            Logger.getLogger(SPIMFLUID_controlsDialog.class.getName()).log(Level.SEVERE, null, ex);
+            dialog_.MessageTextArea.setText("ERROR IN GOING TO INITIAL POSITION");
+        }
+            long TIni;
+            long TEnd;
+            long TotalT;
+            long Intervalms=(long)intervalms;
+                       
+       for (int n=0;n<(numFrames);n++){
+                TIni=System.currentTimeMillis();            
+                   if (Global.shutter==0){ShC_.openshutter(); Global.shutter=1;}
+                    for(int m=0;m<(positions);m++){
+                        if (Global.shutter==0){ShC_.openshutter(); Global.shutter=1;}
+                        
+                        MultiStagePosition MSposition = pl.getPosition(m);
+                        
+                        focusdevice=(String) dialog_.XMotorComboBox.getSelectedItem();                     
+                        StagePosition sp = MSposition.get(focusdevice); 
+                        String TargetX=Double.toString(sp.x);
+                       dialog_.MessageTextArea.setText("TARGET "+focusdevice+ " " +TargetX);   
+                        core_.setPosition(focusdevice,sp.x);                
+                        String fpos=formatter.format(core_.getPosition(focusdevice));
+                       // String fpos=Double.toString(core_.getPosition(focusdevice)).replace(",",".");
+                        dialog_.XPositionField.setText(fpos);
+                      
+                       focusdevice=(String) dialog_.YMotorComboBox.getSelectedItem(); 
+                       sp = MSposition.get(focusdevice);   
+                       String TargetY=Double.toString(sp.x);
+                       dialog_.MessageTextArea.setText("TARGET "+focusdevice+ " " +TargetY);              
+                       core_.setPosition(focusdevice,sp.x);
+                        //fpos=Double.toString(core_.getPosition(focusdevice)).replace(",",".");
+                        fpos=formatter.format(core_.getPosition(focusdevice));
+                        dialog_.YPositionField.setText(fpos);
+                        
+                        
+                       focusdevice=(String) dialog_.StageMotorComboBox.getSelectedItem(); 
+                       double top=Double.parseDouble(dialog_.EndField.getText().replaceAll(",", "."));
+                       String TargetZ=Double.toString(top);
+                       dialog_.MessageTextArea.setText("TARGET "+focusdevice+ " " +TargetZ);              
+                       core_.setPosition(focusdevice,top);
+                        //fpos=Double.toString(core_.getPosition(focusdevice)).replace(",",".");
+                        fpos=formatter.format(core_.getPosition(focusdevice));
+                        dialog_.PositionField.setText(fpos);
+                        
+                       focusdevice=MSposition.getDefaultZStage();
+                       
+                       ///ASPIRE THE SAMPLE ////
+                      /* String RStep="360";
+                       String StateDev="Arduino_SR-Switch";
+                       int onfocus=0;
+                       do {
+                        RotPosition=RC_.leftMove(RStep,RotPosition); 
+                        String STATE=core_.getProperty(StateDev,"State");
+                        dialog_.MessageTextArea.setText("STATE "+STATE); 
+                           onfocus++;
+                       }while (onfocus!=3);
+                       */
+                        
+                    /// ASPIRE 5*5 FULL ROTATIONS   
+                    String STATE="22";
+                    String StateDev="Arduino_SR-Switch";
+                    String InputDev="Arduino_SR-Input";
+                    for (int kk=1; kk<8 ;kk++){
+                    core_.setProperty(StateDev,"State",STATE);
+                   // core_.setProperty("Arduino_SR-Shutter","OnOff","1");
+                   // core_.setProperty("Arduino_SR-Shutter","OnOff","0");
+                    dialog_.MessageTextArea.setText("FULL ROTATION: "+kk);  
+                    }
+                    
+                       try {
+                           // new Thread (new Runnable(){
+                            //    public void run() { 
+
+                                        Global.onfocus=0;
+                                        
+                                        double Threshold=Double.parseDouble(dialog_.TotalTimeField.getText());
+                                        String INPUT="0";
+                                        STATE="20";
+                                        double input=0;
+                                                    do {
+                                                        try {
+
+                                                    core_.setProperty(StateDev,"State",STATE);
+                                                    core_.setProperty("Arduino_SR-Shutter","OnOff","1");
+                                                    core_.setProperty("Arduino_SR-Shutter","OnOff","0");
+                                                    dialog_.MessageTextArea.setText("Threshold: "+Threshold);
+                                                    
+                                                    STATE=core_.getProperty(StateDev,"State");
+                                                    INPUT=core_.getProperty(InputDev,"AnalogInput0");
+                                                    input=Double.parseDouble(INPUT);
+
+                                                        } catch (Exception ex) {
+                                                            Logger.getLogger(SPIMFLUID_controlsDialog.class.getName()).log(Level.SEVERE, null, ex);
+                                                            dialog_.MessageTextArea.setText("ERROR INSIDE LOOP");
+                                                        }
+
+                                                        dialog_.MessageTextArea.setText("INPUT "+INPUT+ "PASO "+Integer.toString(Global.onfocus));
+                                                    // core_.sleep(500);
+                                                        Global.onfocus++;
+                                                    }while (input>Threshold);
+                                                     
+                                                    
+                                                    core_.sleep(3000);
+                                                    //SET SAMPLE IN FOCUS                                                    
+                                                    STATE="47";
+                                                    core_.setProperty(StateDev,"State",STATE);
+                                                    core_.setProperty("Arduino_SR-Shutter","OnOff","1");
+                                                    core_.setProperty("Arduino_SR-Shutter","OnOff","0");
+                                                    core_.setProperty("Arduino_SR-Shutter","OnOff","1");
+                                                    core_.setProperty("Arduino_SR-Shutter","OnOff","0");
+                                                    core_.setProperty("Arduino_SR-Shutter","OnOff","1");                                                    
+                                                    core_.setProperty("Arduino_SR-Shutter","OnOff","0");
+                                                    core_.setProperty("Arduino_SR-Shutter","OnOff","1");                                                    
+                                                    core_.setProperty("Arduino_SR-Shutter","OnOff","0");
+                                                    dialog_.MessageTextArea.setText("STATE LOOP FINISHED");
+                                    //}}).start();
+
+                        } catch (Exception ex) {
+                            Logger.getLogger(SPIMFLUID_controlsDialog.class.getName()).log(Level.SEVERE, null, ex);
+                            dialog_.MessageTextArea.setText("ERROR IN STATE"); 
+                        }
+                       
+                       
+                       
+                       
+                    /*   int onfocus=0;
+                        String STATE="0";
+                       String StateDev="Arduino-Switch";
+                       core_.setProperty(StateDev,"State",1);
+                       do {
+                        //RotPosition=RC_.leftMove(RStep,RotPosition);                       
+                       STATE=core_.getProperty(StateDev,"State");
+                        dialog_.MessageTextArea.setText("STATE "+STATE); 
+                           onfocus++;
+                       }while (STATE=="47");*/
+                       
+                       
+
+                          
+                        for(int l=0;l<(slices);l++){                
+                            
+                            for (int o=0; o<(channels);o++){
+                   if (dialog_.Channel_CheckBox.isSelected()){
+                                //Change filter
+                          //String CIEx=FC_.ChangeExcitationFilter(Excitation_Filters_Index[o]);                   
+                          dialog_.Excitation_ComboBox.setSelectedIndex(Excitation_Filters_Index[o]);
+                          app_.sleep(delay_OPT); 
+                          //String CIEm=FC_.ChangeEmissionFilter(Emission_Filters_Index[o]);
+                         // dialog_.Emission_ComboBox.setSelectedIndex(Emission_Filters_Index[o]);                           
+                         try {
+                            core_.setExposure(Double.parseDouble(Exposure[o]));
+                        } catch (Exception ex) {
+                            dialog_.MessageTextArea.setText("ERROR IN SETTING EXPOSURE");
+                            Logger.getLogger(SPIMFLUID_controlsDialog.class.getName()).log(Level.SEVERE, null, ex);
+                        }
+                          dialog_.MessageTextArea.setText("The filter is: "+Integer.toString(Excitation_Filters_Index[o]+1)+"/n"+"The CIEm is: ");
+                          //core_.sleep(1000); 
+                   }
+                            if (dialog_.ShutterStackCheckBox.isSelected()==true){ShC_.openshutter();Global.shutter=1;dialog_.MessageTextArea.setText("shutter ON");}  
+                            else{dialog_.MessageTextArea.setText("shutter OFF");}
+                            
+                            
+                            if(app_.acquisitionExists(Filename)){
+                                    app_.snapAndAddImage(Filename, n, o, l, m);  //n,m,l
+                            }
+                            else {n=numFrames;m=positions;l=slices;}
+                            
+                          } //channels
+                                if(l!=slices-1){
+                                    if (dialog_.ShutterStackCheckBox.isSelected()==true){ShC_.closeshutter();Global.shutter=0;}
+                                    try {
+                                       /* double position = core_.getPosition(focusdevice); 
+                                        double position_new=position+ZSTEP;                    
+                                        String Position_new0=Double.toString(position_new).replace(",",".");//
+                                        dialog_.MessageTextArea.setText(Position_new0);  
+                                       */
+                                        STATE="43";   //41 is 0.9 degrees     // 43 is 0.45 degrees
+                                        core_.setProperty(StateDev,"State",STATE);
+                                        
+                                      ///position_property="Set position (microns)";
+                                        
+                                        //temporally disable
+                                        ///core_.setProperty(focusdevice,position_property,Position_new0);//
+                                        
+                                        //core_.sleep(50);//
+                                        //core_.setPosition(focusdevice,position_new);
+                                        String Position_new=formatter.format(core_.getPosition(focusdevice));
+                                        dialog_.PositionField.setText(Position_new);
+                                      // app_.setStagePosition(position_new);
+                                        } catch (Exception ex) {
+                                            Logger.getLogger(SPIMFLUID_controlsDialog.class.getName()).log(Level.SEVERE, null, ex);
+                                            dialog_.MessageTextArea.setText("ERROR IN MOVING");
+                                        }
+                                }
+
+                            }
+              //// Return sample to holder     
+                     /*  StateDev="Arduino_SR-Switch";
+                        onfocus=0;
+                       do {
+                        RotPosition=RC_.rightMove(RStep,RotPosition); 
+                        String STATE=core_.getProperty(StateDev,"State");
+                        dialog_.MessageTextArea.setText("STATE "+STATE); 
+                           onfocus++;
+                       }while (onfocus!=3); //(STATE=="30")
+                       */
+                     try {
+            new Thread (new Runnable(){
+                public void run() { 
+                     dialog_.MessageTextArea.setText("RUNNING IN MACRO"); 
+                         String current= System.getProperty("user.dir");
+                         String directory=current+"\\macros\\";
+        
+                        String name="auto_Substack_Montage_final.ijm";
+                        IJ.runMacroFile(directory+name, null);
+             }}).start();
+        
+        } catch (Exception ex) {
+            Logger.getLogger(SPIMFLUID_controlsDialog.class.getName()).log(Level.SEVERE, null, ex);
+            dialog_.MessageTextArea.setText("ERROR IN MACRO"); 
+        }                   
+                        
+//SET SAMPLE out of the FOCUS     
+                    int ret=(int)(slices*2/1600);    /// depends on state 43=4 41=2
+                    STATE="46";
+                    for (int kk=1; kk<ret+1 ;kk++){
+                    core_.setProperty(StateDev,"State",STATE);
+                   // core_.setProperty("Arduino_SR-Shutter","OnOff","1");
+                   // core_.setProperty("Arduino_SR-Shutter","OnOff","0");
+                    dialog_.MessageTextArea.setText("FULL ROTATION OUT: "+kk);  
+                    }
+                        
+                    STATE="46";
+                    core_.setProperty(StateDev,"State",STATE);
+                    core_.setProperty("Arduino_SR-Shutter","OnOff","1");
+                    core_.setProperty("Arduino_SR-Shutter","OnOff","0");
+                    core_.setProperty("Arduino_SR-Shutter","OnOff","1");
+                    core_.setProperty("Arduino_SR-Shutter","OnOff","0");
+                    core_.setProperty("Arduino_SR-Shutter","OnOff","1");                                                    
+                    core_.setProperty("Arduino_SR-Shutter","OnOff","0");   
+                    core_.setProperty("Arduino_SR-Shutter","OnOff","1");                                                    
+                    core_.setProperty("Arduino_SR-Shutter","OnOff","0");  
+                    dialog_.MessageTextArea.setText("STATE LOOP FINISHED");
+                        
+              STATE="2";
+              core_.setProperty(StateDev,"State",STATE);
+                                              try {
+                           // new Thread (new Runnable(){
+                            //    public void run() { 
+
+                                       // int onfocus=0;
+                                        double Threshold=400;
+                                        String INPUT="0";
+                                        STATE="21";
+
+                                        double input=0;
+                                                    do {
+                                                        try {
+
+                                                    core_.setProperty(StateDev,"State",STATE);
+                                                    core_.setProperty("Arduino_SR-Shutter","OnOff","1");
+                                                    core_.setProperty("Arduino_SR-Shutter","OnOff","0");
+
+                                                    STATE=core_.getProperty(StateDev,"State");
+                                                    INPUT=core_.getProperty(InputDev,"AnalogInput0");
+                                                    input=Double.parseDouble(INPUT);
+
+                                                        } catch (Exception ex) {
+                                                            Logger.getLogger(SPIMFLUID_controlsDialog.class.getName()).log(Level.SEVERE, null, ex);
+                                                            dialog_.MessageTextArea.setText("ERROR INSIDE LOOP");
+                                                        }
+
+                                                        dialog_.MessageTextArea.setText("INPUT "+INPUT+ "PASO "+Integer.toString(Global.onfocus));
+                                                    // core_.sleep(500);
+                                                        Global.onfocus--;
+                                                    }while (Global.onfocus!=0);
+                                                    /*STATE="2";
+                                                    core_.setProperty(StateDev,"State",STATE);
+                                                    dialog_.MessageTextArea.setText("STATE LOOP FINISHED"+Integer.toString(Global.onfocus));*/
+                                   // }}).start();
+                                                    
+                                                                        /// ASPIRE THREE FULL ROTATIONS   
+                            //// RETURN SAMPLE THREE FULL ROTATIONS                                  
+                            STATE="23";
+                            for (int kk=1; kk<8 ;kk++){
+                            core_.setProperty(StateDev,"State",STATE);
+                           // core_.setProperty("Arduino_SR-Shutter","OnOff","1");
+                           // core_.setProperty("Arduino_SR-Shutter","OnOff","0");
+                            }
+
+                        } catch (Exception ex) {
+                            Logger.getLogger(SPIMFLUID_controlsDialog.class.getName()).log(Level.SEVERE, null, ex);
+                            dialog_.MessageTextArea.setText("ERROR IN STATE"); 
+                        }
+                            // Macro runner
+                            /*String mymacro = "open();";
+                            new ij.macro.MacroRunner(mymacro);*/
+                       
+             /////          
+                         try {
+                            core_.setPosition(focusdevice,ZINI);
+                            core_.sleep(100);
+                             String Position_new=formatter.format(core_.getPosition(focusdevice));
+                            dialog_.PositionField.setText(Position_new);
+                        } catch (Exception ex) {
+                             Logger.getLogger(SPIMFLUID_controlsDialog.class.getName()).log(Level.SEVERE, null, ex);
+                        }
+
+                        if(positions>1){ShC_.openshutter();Global.shutter=1;}
+                       
+                        
+
+                      
+                       //// RotPosition=RC_.leftMove(RotStep,RotPosition);                        
+                        dialog_.AnglePositionField.setText(RotPosition);
+                         if(dialog_.ShutterRotationCheckBox.isSelected()==true){ShC_.closeshutter();Global.shutter=0;}
+                        }
+                    
+                    TEnd=System.currentTimeMillis();
+                    TotalT=TEnd-TIni;
+                    dialog_.MessageTextArea.setText(String.valueOf(TotalT));
+                   if (dialog_.StackCheckBox.isSelected()==true){ShC_.closeshutter();Global.shutter=0;dialog_.MessageTextArea.setText("shutter OFF");}
+                   if (dialog_.ShutterRotationCheckBox.isSelected()==true){ShC_.closeshutter();Global.shutter=0;dialog_.MessageTextArea.setText("shutter OFF");}
+                   else if(dialog_.ShutterRotationCheckBox.isSelected()==false){ShC_.openshutter();Global.shutter=1;dialog_.MessageTextArea.setText("shutter ON");}
+                   if (TotalT<Intervalms && n!=(numFrames-1)){
+                            app_.sleep(Intervalms-TotalT);
+                        }
+                    //wait until
+                   
+                    }
+                ShC_.closeshutter();Global.shutter=0;dialog_.MessageTextArea.setText("shutter OFF");
+                app_.closeAcquisition(Filename);
+                //FC_.ChangeExcitationFilter(Excitation_Filters_Index[0]);
+                dialog_.Excitation_ComboBox.setSelectedIndex(Excitation_Filters_Index[0]);
+                //FC_.ChangeEmissionFilter(Emission_Filters_Index[0]);
+                dialog_.Emission_ComboBox.setSelectedIndex(Emission_Filters_Index[0]);
+            
+            } catch (Exception ex) {
+                Logger.getLogger(SPIMFLUID_controlsDialog.class.getName()).log(Level.SEVERE, null, ex);
+                dialog_.MessageTextArea.setText("Error in DSLM/SPIM Mode");
+            }
+        }//END IF
+    
+    
+    
+
+        return Mode;
+     }
+     
+String OPT (){   
+         
+        //acq_.clear();    
+        //acq_.setSaveFiles(false);    
+        
+        //ss.save=false;
+   
+        int numFrames=1;
+        int slices=1;
+        int channels=1;
+        int positions=1;
+            
+        String focusdevice=core_.getFocusDevice();
+        String xyStage = core_.getXYStageDevice();
+        core_.setAutoShutter(false);
+
+        //////////// This is only to detect the Focus device position property!!!! ///////
+        // IF appears in metadata this can be deleted ////
+       StrVector devicePropertyNames;  
+       String position_property="";
+       NumberFormat formatter2 = new DecimalFormat("#.####");
+        try {
+            devicePropertyNames = core_.getDevicePropertyNames(focusdevice);
+     
+             for(int x=0;x<devicePropertyNames.size();x++){
+                 if (!core_.isPropertyReadOnly(focusdevice, devicePropertyNames.get(x))){
+                //double position = core_.getPosition(focusdevice);
+                String property_value = core_.getProperty(focusdevice, devicePropertyNames.get(x));
+                String Position=formatter2.format(core_.getPosition(focusdevice)).replaceAll(",", ".");
+               if (property_value.compareTo(Position)==0){ position_property=devicePropertyNames.get(x);}
+              dialog_.MessageTextArea.setText(property_value+"  "+Position + devicePropertyNames.get(x));
+              //core_.sleep(5000);                      
+                                       }
+             }      
+           } catch (Exception ex) {
+            Logger.getLogger(SPIMFLUID_controlsDialog.class.getName()).log(Level.SEVERE, null, ex);
+             dialog_.MessageTextArea.setText("Error in device detection");
+        }
+
+
+/////////////// Mode Configuration  /////////////        
+        
+ String Mode=(String) dialog_.ModeComboBox.getSelectedItem();    
+ 
+ 
+
+///////////   Save Files Configuration //////////////             
+        String Filename="test";
+        //String Rootname="D:\\DSLM_DATA\\SPIM_V10";
+        String Rootname=dialog_.RootDirectoryField.getText();
+        boolean issaved=false;
+        
+        if(dialog_.SaveCheckBox.isSelected()){
+            Rootname=dialog_.RootDirectoryField.getText();
+            Filename=dialog_.FileNameField.getText();
+            dialog_.MessageTextArea.setText(Rootname+"\\" +Filename);
+            
+            issaved=true;
+            
+            acq_.setDirName(Filename);
+            acq_.setRootName(Rootname);
+            acq_.setSaveFiles(true);
+            acq_.setComment(dialog_.MessageTextArea.getText());
+            //ss.prefix=Filename;
+            //ss.root=Rootname;
+            //ss.save=true;
+            //ss.comment=dialog_.MessageTextArea.getText();
+        }
+
+//////////  Sample Rotation Configuration  ///////////   
+   String RotPosition=dialog_.AnglePositionField.getText();
+   String RotStep=(String)dialog_.RotationComboBox.getSelectedItem();
+   String Delay_OPT=dialog_.DelayField.getText();
+   long delay_OPT=Long.parseLong(Delay_OPT);
+   if ("DSLM/SPIM".equals(Mode)){     
+        if(dialog_.ShutterRotationCheckBox.isSelected()==true){
+            acq_.keepShutterOpenForChannels(false);
+            //ss.keepShutterOpenChannels=true;
+        }
+        else{acq_.keepShutterOpenForChannels(true);
+        
+            //ss.keepShutterOpenChannels=true;
+        }
+        float RStep=Float.parseFloat(RotStep);// parsedouble(RotStep);
+        positions=1;
+        if (RStep==0){positions=1;}
+        else {positions =(int) ((int) 360/RStep);}
+   } 
+     else if ("Continous".equals(Mode)){     
+        if(dialog_.ShutterRotationCheckBox.isSelected()==true){acq_.keepShutterOpenForChannels(false);}
+        else{acq_.keepShutterOpenForChannels(true);}
+        float RStep=Float.parseFloat(RotStep);// parsedouble(RotStep);
+        positions=1;
+        if (RStep==0){positions=1;}
+        else {positions =(int) ((int) 360/RStep);}
+   } 
+     else if ("OPT".equals(Mode)){
+         dialog_.MessageTextArea.setText("OPT Mode");
+  
+  }
+   
+
+///////////////  Stack Configuration  //////////////////   
+     
+        NumberFormat formatter = new DecimalFormat("#.0000");
+        double ZINI=0;
+        double ZSTEP=0.5;
+        double time=10;
+        
+   if ("DSLM/SPIM".equals(Mode)){
+        double bottom=Double.parseDouble(dialog_.StartField.getText().replaceAll(",", "."));
+        double top=Double.parseDouble(dialog_.EndField.getText().replaceAll(",", "."));
+        double step=Double.parseDouble(dialog_.StepField.getText().replaceAll(",", "."));
+        boolean absolute=true;
+        String ZStep=dialog_.StepField.getText();
+        ZSTEP=Double.parseDouble(ZStep.replaceAll(",", "."));
+        String ZIni=dialog_.StartField.getText();
+        ZINI=Double.parseDouble(ZIni.replaceAll(",", "."));
+        acq_.enableZSliceSetting(false);
+        //ss.slicesFirst=false;
+       
+        if(dialog_.ShutterStackCheckBox.isSelected()==true){acq_.keepShutterOpenForStack(false);
+        //ss.keepShutterOpenSlices=false;
+        }
+        else{
+            acq_.keepShutterOpenForStack(true);
+        //ss.keepShutterOpenSlices=true;
+        }
+        
+        if (dialog_.StackCheckBox.isSelected()){
+            acq_.enableZSliceSetting(true);
+            //ss.slicesFirst=true;
+            acq_.setSlices(bottom,top,step,absolute);
+           // ArrayList a = new ArrayList();
+           // a.set(0, bottom);a.set(1, top);a.set(2, step);a.set(3, absolute);
+           // ss.slices=a;
+                    //ss.
+                                   
+            double aux=(top-bottom)/step;
+            slices=(int)Math.ceil(aux)+1;
+            ZIni=dialog_.StartField.getText();
+            ZINI=Double.parseDouble(ZIni.replaceAll(",", "."));
+        }
+        else{
+            //acq_.setSingleFrame(true);//
+            acq_.enableZSliceSetting(false);
+            //acq_.setSlices(bottom,bottom,step,absolute);
+            slices=1;
+            ZIni=dialog_.PositionField.getText();
+            ZINI=Double.parseDouble(ZIni.replaceAll(",", "."));
+        }   
+   }
+     else if ("Continous".equals(Mode)){
+        double bottom=Double.parseDouble(dialog_.StartField.getText().replaceAll(",", "."));
+        double top=Double.parseDouble(dialog_.EndField.getText().replaceAll(",", "."));
+        double step=Double.parseDouble(dialog_.StepField.getText().replaceAll(",", "."));
+        time=Double.parseDouble(dialog_.TotalTimeField.getText().replaceAll(",", "."));
+        boolean absolute=true;
+        String ZStep=dialog_.StepField.getText();
+        ZSTEP=Double.parseDouble(ZStep.replaceAll(",", "."));
+        String ZIni=dialog_.StartField.getText();
+        ZINI=Double.parseDouble(ZIni.replaceAll(",", "."));
+        acq_.enableZSliceSetting(false);
+       
+        if(dialog_.ShutterStackCheckBox.isSelected()==true){acq_.keepShutterOpenForStack(false);}
+        else{acq_.keepShutterOpenForStack(true);}
+        
+        if (dialog_.StackCheckBox.isSelected()){
+            acq_.enableZSliceSetting(true);
+            acq_.setSlices(bottom,top,step,absolute);
+                                   
+            double aux=(top-bottom)/step;
+            slices=(int)Math.ceil(aux)+1;
+            ZIni=dialog_.StartField.getText();
+            ZINI=Double.parseDouble(ZIni.replaceAll(",", "."));
+        }
+        else{
+            //acq_.setSingleFrame(true);//
+            acq_.enableZSliceSetting(false);
+            //acq_.setSlices(bottom,bottom,step,absolute);
+            slices=1;
+            ZIni=dialog_.PositionField.getText();
+            ZINI=Double.parseDouble(ZIni.replaceAll(",", "."));
+        }   
+   }
+     
+     
+  else if ("OPT".equals(Mode)){
+        if(dialog_.ShutterRotationCheckBox.isSelected()==true){acq_.keepShutterOpenForChannels(false);}
+        else{acq_.keepShutterOpenForChannels(true);}
+        float RStep=Float.parseFloat(RotStep);
+        slices=1;
+        if (RStep==0){slices=1;}
+        else {slices =(int) ((int) 360/RStep);}
+        dialog_.MessageTextArea.setText("Slices are: "+Integer.toString(slices));
+        core_.sleep(2000);
+  }
+
+   
+////////////////  Time Lapse Configuration  ////////////////////   
+        Object numFramesS=dialog_.TimeFrames.getValue();
+        numFrames=((Integer) numFramesS).intValue();
+        double interval=Double.parseDouble(dialog_.IntervalTime.getText());
+        String units=(String)dialog_.IntervalUnits.getSelectedItem();
+        acq_.enableFramesSetting(false);
+        double intervalms=0;
+        
+        if (dialog_.TimeLapseCheckBox.isSelected()){
+            //acq_.setSingleFrame(false);
+            acq_.enableFramesSetting(true);
+           if ("s".equals(units)) {intervalms=interval*1000;}
+           else if ("min".equals(units)) {intervalms=interval*60000;}
+           else if ("ms".equals(units)) {intervalms=interval;}            
+            acq_.setFrames(numFrames,intervalms);
+        }
+        else{
+            numFrames=1;
+            acq_.enableFramesSetting(true);
+            acq_.setFrames(numFrames,interval);
+            //acq_.setSingleFrame(true);
+        }
+                      
+//////////// Channels configuration    /////////////////// 
+       String channelname[] = new String[6];
+       String Excitation[] = new String[6];
+       String Emission[] = new String[6];
+       String Exposure[] = new String[6];
+       String Excitation_filters[]= new String[6];
+       String Emission_filters[]= new String[6];
+       
+       for(int n=0;n<6;n++){
+                Excitation_filters[n]=(String)dialog_.Excitation_ComboBox.getItemAt(n);
+                Emission_filters[n]=(String)dialog_.Emission_ComboBox.getItemAt(n);
+                    }
+        if (dialog_.Channel_CheckBox.isSelected()){
+            channels=0;
+                for(int n=0;n<6;n++){
+                    if(((Boolean)dialog_.Channels_table.getValueAt(n, 4)).booleanValue()==true){                           
+                        channelname[channels]=(String)dialog_.Channels_table.getValueAt(n, 0);
+                        Excitation[channels]=(String)dialog_.Channels_table.getValueAt(n, 1);
+                        Emission[channels]=(String)dialog_.Channels_table.getValueAt(n, 2);                       
+                        Exposure[channels]=(String)dialog_.Channels_table.getValueAt(n, 3);
+                        channels=channels+1;                         
+                    }               
+                }
+            dialog_.MessageTextArea.setText("Number of channels is"+Integer.toString(channels));
+            
+        }
+        else{
+             channels=1;
+             channelname[0] = "Channel_0";
+            try {               
+                Exposure[0]=Double.toString(core_.getExposure());
+            } catch (Exception ex) {
+                dialog_.MessageTextArea.setText("ERROR IN GETTING EXPOSURE");
+                Logger.getLogger(SPIMFLUID_controlsDialog.class.getName()).log(Level.SEVERE, null, ex);
+            }
+             Excitation[0]=(String)dialog_.Excitation_ComboBox.getSelectedItem();
+             Emission[0]=(String)dialog_.Emission_ComboBox.getSelectedItem();            
+        }
+   
+                  
+////////////////  ACQUISITION IN OPT Mode (Slices are angles)  //////////////////   
+ if("OPT".equals(Mode)){
+          try {
+                boolean isshown=true; //slices, positions              
+                app_.openAcquisition(Filename, Rootname, numFrames, channels, slices, isshown, issaved);
+   /////////////////////  RENAME CHANNELS  //////////////////
+
+        int[] Excitation_Filters_Index={0,0,0,0,0,0};
+        int[] Emission_Filters_Index={0,0,0,0,0,0};
+               for(int n=0;n<channels;n++){                     
+                        app_.setChannelName(Filename, n, channelname[n]);
+                       // app_.setChannelColor(Filename, n, channelcolor[n]);    
+                        
+                     for(int m=0;m<6;m++){
+                                if(Excitation_filters[m].equalsIgnoreCase(Excitation[n])){
+                                    Excitation_Filters_Index[n]=m;
+                                }
+                                 if(Emission_filters[m].equalsIgnoreCase(Emission[n])){
+                                    Emission_Filters_Index[n]=m;
+                                }
+                       }  
+            }                
+                
+            long TIni;
+            long TEnd;
+            long TotalT;
+            long Intervalms=(long)intervalms;
+
+//////////////////////  ACQUIRE  /////////////////////////////////////
+
+           for (int n=0;n<(numFrames);n++){
+                TIni=System.currentTimeMillis();     
+                        ShC_.openshutter();    
+                        Global.shutter=1;
+                    
+                        for(int l=0;l<(slices);l++){
+                           
+                            for (int o=0; o<(channels);o++){
+                                    //Change filter   
+                       if (dialog_.Channel_CheckBox.isSelected()){
+                                    String CIEx=FC_.ChangeExcitationFilter(Excitation_Filters_Index[o]);
+                                    app_.sleep(delay_OPT); 
+                                    //String CIEm=FC_.ChangeEmissionFilter(Emission_Filters_Index[o]);
+                                    //app_.sleep(delay_OPT); 
+                                    try {
+                                        core_.setExposure(Double.parseDouble(Exposure[o]));
+                                    } catch (Exception ex) {
+                                        dialog_.MessageTextArea.setText("ERROR IN SETTING EXPOSURE");
+                                        Logger.getLogger(SPIMFLUID_controlsDialog.class.getName()).log(Level.SEVERE, null, ex);
+                                    }
+                                    dialog_.MessageTextArea.setText("The filter is: "+Integer.toString(Excitation_Filters_Index[o]+1)+"/n"+"The CIEx is: "+ CIEx);
+                         }
+                            if(app_.acquisitionExists(Filename)){
+                                    //app_.sleep(delay_OPT); //variable delay in acquisition
+                                    //app_.snapAndAddImage(Filename, n, o, l);  //n,m,l    
+                                    int mm=0;
+                                    app_.snapAndAddImage(Filename, n, o, l, mm);
+                            }
+                            else {n=numFrames;l=slices;}
+                                if(l!=slices-1){
+                                    //Pos=SC_.setPosUp(Pos,ZStep);                                       
+                                }                                
+                            }//channels
+                        
+                            RotPosition=RC_.leftMove(RotStep,RotPosition);                   
+                            dialog_.AnglePositionField.setText(RotPosition);
+                    }//slices
+                                     
+                    TEnd=System.currentTimeMillis();
+                    TotalT=TEnd-TIni;
+                    //dialog_.MessageTextArea.setText(String.valueOf(TotalT));
+                   
+                   if (TotalT<Intervalms && n!=(numFrames-1)){
+                            app_.sleep(Intervalms-TotalT);
+                        }
+                    //wait until
+                    ShC_.closeshutter(); 
+                    Global.shutter=0;  
+                    }//Frames
+
+                
+            app_.closeAcquisition(Filename);
+                    
+           } catch (Exception ex) {
+                Logger.getLogger(SPIMFLUID_controlsDialog.class.getName()).log(Level.SEVERE, null, ex);
+                dialog_.MessageTextArea.setText("Error in OPT Mode");
+            }           
+        }//END ELSE
+        return Mode;
+     }
+     
+String OPT_CONT (){   
+         
+        //acq_.clear();    
+        //acq_.setSaveFiles(false);    
+        
+        //ss.save=false;
+   
+        int numFrames=1;
+        int slices=1;
+        int channels=1;
+        int positions=1;
+            
+        String focusdevice=core_.getFocusDevice();
+        String xyStage = core_.getXYStageDevice();
+        core_.setAutoShutter(false);
+
+        //////////// This is only to detect the Focus device position property!!!! ///////
+        // IF appears in metadata this can be deleted ////
+       StrVector devicePropertyNames;  
+       String position_property="";
+       NumberFormat formatter2 = new DecimalFormat("#.####");
+        try {
+            devicePropertyNames = core_.getDevicePropertyNames(focusdevice);
+     
+             for(int x=0;x<devicePropertyNames.size();x++){
+                 if (!core_.isPropertyReadOnly(focusdevice, devicePropertyNames.get(x))){
+                //double position = core_.getPosition(focusdevice);
+                String property_value = core_.getProperty(focusdevice, devicePropertyNames.get(x));
+                String Position=formatter2.format(core_.getPosition(focusdevice)).replaceAll(",", ".");
+               if (property_value.compareTo(Position)==0){ position_property=devicePropertyNames.get(x);}
+              dialog_.MessageTextArea.setText(property_value+"  "+Position + devicePropertyNames.get(x));
+              //core_.sleep(5000);                      
+                                       }
+             }      
+           } catch (Exception ex) {
+            Logger.getLogger(SPIMFLUID_controlsDialog.class.getName()).log(Level.SEVERE, null, ex);
+             dialog_.MessageTextArea.setText("Error in device detection");
+        }
+
+
+/////////////// Mode Configuration  /////////////        
+        
+ String Mode=(String) dialog_.ModeComboBox.getSelectedItem();    
+ 
+ 
+
+///////////   Save Files Configuration //////////////             
+        String Filename="test";
+        //String Rootname="D:\\DSLM_DATA\\SPIM_V10";
+        String Rootname=dialog_.RootDirectoryField.getText();
+        boolean issaved=false;
+        
+        if(dialog_.SaveCheckBox.isSelected()){
+            Rootname=dialog_.RootDirectoryField.getText();
+            Filename=dialog_.FileNameField.getText();
+            dialog_.MessageTextArea.setText(Rootname+"\\" +Filename);
+            
+            issaved=true;
+            
+            acq_.setDirName(Filename);
+            acq_.setRootName(Rootname);
+            acq_.setSaveFiles(true);
+            acq_.setComment(dialog_.MessageTextArea.getText());
+            //ss.prefix=Filename;
+            //ss.root=Rootname;
+            //ss.save=true;
+            //ss.comment=dialog_.MessageTextArea.getText();
+        }
+
+//////////  Sample Rotation Configuration  ///////////   
+   String RotPosition=dialog_.AnglePositionField.getText();
+   String RotStep=(String)dialog_.RotationComboBox.getSelectedItem();
+   String Delay_OPT=dialog_.DelayField.getText();
+   long delay_OPT=Long.parseLong(Delay_OPT);
+   if ("DSLM/SPIM".equals(Mode)){     
+        if(dialog_.ShutterRotationCheckBox.isSelected()==true){
+            acq_.keepShutterOpenForChannels(false);
+            //ss.keepShutterOpenChannels=true;
+        }
+        else{acq_.keepShutterOpenForChannels(true);
+        
+            //ss.keepShutterOpenChannels=true;
+        }
+        float RStep=Float.parseFloat(RotStep);// parsedouble(RotStep);
+        positions=1;
+        if (RStep==0){positions=1;}
+        else {positions =(int) ((int) 360/RStep);}
+   } 
+     else if ("Continous".equals(Mode)){     
+        if(dialog_.ShutterRotationCheckBox.isSelected()==true){acq_.keepShutterOpenForChannels(false);}
+        else{acq_.keepShutterOpenForChannels(true);}
+        float RStep=Float.parseFloat(RotStep);// parsedouble(RotStep);
+        positions=1;
+        if (RStep==0){positions=1;}
+        else {positions =(int) ((int) 360/RStep);}
+   } 
+     else if ("OPT_CONT".equals(Mode)){
+         dialog_.MessageTextArea.setText("OPT_CONT Mode");
+  
+  }
+   
+
+///////////////  Stack Configuration  //////////////////   
+     
+        NumberFormat formatter = new DecimalFormat("#.0000");
+        double ZINI=0;
+        double ZSTEP=0.5;
+        double time=10;
+        
+   if ("DSLM/SPIM".equals(Mode)){
+        double bottom=Double.parseDouble(dialog_.StartField.getText().replaceAll(",", "."));
+        double top=Double.parseDouble(dialog_.EndField.getText().replaceAll(",", "."));
+        double step=Double.parseDouble(dialog_.StepField.getText().replaceAll(",", "."));
+        boolean absolute=true;
+        String ZStep=dialog_.StepField.getText();
+        ZSTEP=Double.parseDouble(ZStep.replaceAll(",", "."));
+        String ZIni=dialog_.StartField.getText();
+        ZINI=Double.parseDouble(ZIni.replaceAll(",", "."));
+        acq_.enableZSliceSetting(false);
+        //ss.slicesFirst=false;
+       
+        if(dialog_.ShutterStackCheckBox.isSelected()==true){acq_.keepShutterOpenForStack(false);
+        //ss.keepShutterOpenSlices=false;
+        }
+        else{
+            acq_.keepShutterOpenForStack(true);
+        //ss.keepShutterOpenSlices=true;
+        }
+        
+        if (dialog_.StackCheckBox.isSelected()){
+            acq_.enableZSliceSetting(true);
+            //ss.slicesFirst=true;
+            acq_.setSlices(bottom,top,step,absolute);
+           // ArrayList a = new ArrayList();
+           // a.set(0, bottom);a.set(1, top);a.set(2, step);a.set(3, absolute);
+           // ss.slices=a;
+                    //ss.
+                                   
+            double aux=(top-bottom)/step;
+            slices=(int)Math.ceil(aux)+1;
+            ZIni=dialog_.StartField.getText();
+            ZINI=Double.parseDouble(ZIni.replaceAll(",", "."));
+        }
+        else{
+            //acq_.setSingleFrame(true);//
+            acq_.enableZSliceSetting(false);
+            //acq_.setSlices(bottom,bottom,step,absolute);
+            slices=1;
+            ZIni=dialog_.PositionField.getText();
+            ZINI=Double.parseDouble(ZIni.replaceAll(",", "."));
+        }   
+   }
+     else if ("Continous".equals(Mode)){
+        double bottom=Double.parseDouble(dialog_.StartField.getText().replaceAll(",", "."));
+        double top=Double.parseDouble(dialog_.EndField.getText().replaceAll(",", "."));
+        double step=Double.parseDouble(dialog_.StepField.getText().replaceAll(",", "."));
+        time=Double.parseDouble(dialog_.TotalTimeField.getText().replaceAll(",", "."));
+        boolean absolute=true;
+        String ZStep=dialog_.StepField.getText();
+        ZSTEP=Double.parseDouble(ZStep.replaceAll(",", "."));
+        String ZIni=dialog_.StartField.getText();
+        ZINI=Double.parseDouble(ZIni.replaceAll(",", "."));
+        acq_.enableZSliceSetting(false);
+       
+        if(dialog_.ShutterStackCheckBox.isSelected()==true){acq_.keepShutterOpenForStack(false);}
+        else{acq_.keepShutterOpenForStack(true);}
+        
+        if (dialog_.StackCheckBox.isSelected()){
+            acq_.enableZSliceSetting(true);
+            acq_.setSlices(bottom,top,step,absolute);
+                                   
+            double aux=(top-bottom)/step;
+            slices=(int)Math.ceil(aux)+1;
+            ZIni=dialog_.StartField.getText();
+            ZINI=Double.parseDouble(ZIni.replaceAll(",", "."));
+        }
+        else{
+            //acq_.setSingleFrame(true);//
+            acq_.enableZSliceSetting(false);
+            //acq_.setSlices(bottom,bottom,step,absolute);
+            slices=1;
+            ZIni=dialog_.PositionField.getText();
+            ZINI=Double.parseDouble(ZIni.replaceAll(",", "."));
+        }   
+   }
+     
+     
+  else if ("OPT_CONT".equals(Mode)){
+        if(dialog_.ShutterRotationCheckBox.isSelected()==true){acq_.keepShutterOpenForChannels(false);}
+        else{acq_.keepShutterOpenForChannels(true);}
+        float RStep=Float.parseFloat(RotStep);
+        slices=1;
+        if (RStep==0){slices=1;}
+        else {slices =(int) ((int) 360/RStep);}
+        dialog_.MessageTextArea.setText("Slices are: "+Integer.toString(slices));
+        
+
+  }
+
+   
+////////////////  Time Lapse Configuration  ////////////////////   
+        Object numFramesS=dialog_.TimeFrames.getValue();
+        numFrames=((Integer) numFramesS).intValue();
+        double interval=Double.parseDouble(dialog_.IntervalTime.getText());
+        String units=(String)dialog_.IntervalUnits.getSelectedItem();
+        acq_.enableFramesSetting(false);
+        double intervalms=0;
+        
+        if (dialog_.TimeLapseCheckBox.isSelected()){
+            //acq_.setSingleFrame(false);
+            acq_.enableFramesSetting(true);
+           if ("s".equals(units)) {intervalms=interval*1000;}
+           else if ("min".equals(units)) {intervalms=interval*60000;}
+           else if ("ms".equals(units)) {intervalms=interval;}            
+            acq_.setFrames(numFrames,intervalms);
+        }
+        else{
+            numFrames=1;
+            acq_.enableFramesSetting(true);
+            acq_.setFrames(numFrames,interval);
+            //acq_.setSingleFrame(true);
+        }
+                      
+//////////// Channels configuration    /////////////////// 
+       String channelname[] = new String[6];
+       String Excitation[] = new String[6];
+       String Emission[] = new String[6];
+       String Exposure[] = new String[6];
+       String Excitation_filters[]= new String[6];
+       String Emission_filters[]= new String[6];
+       
+       for(int n=0;n<6;n++){
+                Excitation_filters[n]=(String)dialog_.Excitation_ComboBox.getItemAt(n);
+                Emission_filters[n]=(String)dialog_.Emission_ComboBox.getItemAt(n);
+                    }
+        if (dialog_.Channel_CheckBox.isSelected()){
+            channels=0;
+                for(int n=0;n<6;n++){
+                    if(((Boolean)dialog_.Channels_table.getValueAt(n, 4)).booleanValue()==true){                           
+                        channelname[channels]=(String)dialog_.Channels_table.getValueAt(n, 0);
+                        Excitation[channels]=(String)dialog_.Channels_table.getValueAt(n, 1);
+                        Emission[channels]=(String)dialog_.Channels_table.getValueAt(n, 2);                       
+                        Exposure[channels]=(String)dialog_.Channels_table.getValueAt(n, 3);
+                        channels=channels+1;                         
+                    }               
+                }
+            dialog_.MessageTextArea.setText("Number of channels is"+Integer.toString(channels));
+            
+        }
+        else{
+             channels=1;
+             channelname[0] = "Channel_0";
+            try {               
+                Exposure[0]=Double.toString(core_.getExposure());
+            } catch (Exception ex) {
+                dialog_.MessageTextArea.setText("ERROR IN GETTING EXPOSURE");
+                Logger.getLogger(SPIMFLUID_controlsDialog.class.getName()).log(Level.SEVERE, null, ex);
+            }
+             Excitation[0]=(String)dialog_.Excitation_ComboBox.getSelectedItem();
+             Emission[0]=(String)dialog_.Emission_ComboBox.getSelectedItem();            
+        }
+   
+            
+////////////////  ACQUISITION IN OPT Mode (Slices are angles)  //////////////////   
+ if("OPT_CONT".equals(Mode)){
+          try {
+              
+              try{
+              app_.closeAllAcquisitions();
+                boolean isshown=true; //slices, positions              
+              app_.openAcquisition(Filename, Rootname, numFrames, channels, slices, isshown, issaved);
+               } catch (Exception ex) {
+                Logger.getLogger(SPIMFLUID_controlsDialog.class.getName()).log(Level.SEVERE, null, ex);
+                dialog_.MessageTextArea.setText("Error in open acquisition");
+                //core_.sleep(4000);
+                 } 
+   /////////////////////  RENAME CHANNELS  //////////////////
+
+        int[] Excitation_Filters_Index={0,0,0,0,0,0};
+        int[] Emission_Filters_Index={0,0,0,0,0,0};
+               for(int n=0;n<channels;n++){                     
+                        app_.setChannelName(Filename, n, channelname[n]);
+                       // app_.setChannelColor(Filename, n, channelcolor[n]);    
+                        
+                     for(int m=0;m<6;m++){
+                                if(Excitation_filters[m].equalsIgnoreCase(Excitation[n])){
+                                    Excitation_Filters_Index[n]=m;
+                                }
+                                 if(Emission_filters[m].equalsIgnoreCase(Emission[n])){
+                                    Emission_Filters_Index[n]=m;
+                                }
+                       }  
+            }                
+                
+            long TIni;
+            long TEnd;
+            long TotalT;
+            long Intervalms=(long)intervalms;
+
+//////////////////////  ACQUIRE  /////////////////////////////////////
+
+       
+            
+           for (int n=0;n<(numFrames);n++){
+
+                       
+                try {
+                        new Thread (new Runnable(){
+                        public void run() { 
+                                            core_.sleep(1000);
+                                            String STATE="24";
+                                            String StateDev="Arduino_SR-Switch";
+                                            String InputDev="Arduino_SR-Input";
+                                            for (int kk=1; kk<2 ;kk++){
+                                                            try {
+                                                                core_.setProperty(StateDev,"State",STATE);
+                                                            } catch (Exception ex) {
+                                                                Logger.getLogger(acquisition.class.getName()).log(Level.SEVERE, null, ex);
+                                                            }
+
+                                            dialog_.MessageTextArea.setText("FULL ROTATION: "+kk);  
+                                            }
+
+                                        }}).start();
+                        } catch (Exception ex) {
+                            Logger.getLogger(SPIMFLUID_controlsDialog.class.getName()).log(Level.SEVERE, null, ex);
+                            dialog_.MessageTextArea.setText("ERROR IN ROTATION THREAD");
+                            core_.sleep(4000);
+                     }
+
+                            
+                           int mm=0;
+                           int o=0;
+                        for(int l=0;l<(slices);l++){
+                            
+                                    app_.runAcquisition(Filename, Rootname);    
+                              }//slices
+
+                }//Frames
+
+                    
+           } catch (Exception ex) {
+                Logger.getLogger(SPIMFLUID_controlsDialog.class.getName()).log(Level.SEVERE, null, ex);
+                dialog_.MessageTextArea.setText("Error in OPT CONT Mode");
+            }           
+        }//END ELSE
+        return Mode;
+     }
+     
+String Continous (){   
+         
+        acq_.clear();    
+        //acq_.setSaveFiles(false);    
+        
+        //ss.save=false;
+   
+        int numFrames=1;
+        int slices=1;
+        int channels=1;
+        int positions=1;
+            
+        String focusdevice=core_.getFocusDevice();
+        String xyStage = core_.getXYStageDevice();
+        core_.setAutoShutter(false);
+
+        //////////// This is only to detect the Focus device position property!!!! ///////
+        // IF appears in metadata this can be deleted ////
+       StrVector devicePropertyNames;  
+       String position_property="";
+       NumberFormat formatter2 = new DecimalFormat("#.####");
+        try {
+            devicePropertyNames = core_.getDevicePropertyNames(focusdevice);
+     
+             for(int x=0;x<devicePropertyNames.size();x++){
+                 if (!core_.isPropertyReadOnly(focusdevice, devicePropertyNames.get(x))){
+                //double position = core_.getPosition(focusdevice);
+                String property_value = core_.getProperty(focusdevice, devicePropertyNames.get(x));
+                String Position=formatter2.format(core_.getPosition(focusdevice)).replaceAll(",", ".");
+               if (property_value.compareTo(Position)==0){ position_property=devicePropertyNames.get(x);}
+              dialog_.MessageTextArea.setText(property_value+"  "+Position + devicePropertyNames.get(x));
+              //core_.sleep(5000);                      
+                                       }
+             }      
+           } catch (Exception ex) {
+            Logger.getLogger(SPIMFLUID_controlsDialog.class.getName()).log(Level.SEVERE, null, ex);
+             dialog_.MessageTextArea.setText("Error in device detection");
+        }
+
+
+/////////////// Mode Configuration  /////////////        
+        
+ String Mode=(String) dialog_.ModeComboBox.getSelectedItem();    
+ 
+ 
+
+///////////   Save Files Configuration //////////////             
+        String Filename="test";
+        //String Rootname="D:\\DSLM_DATA\\SPIM_V10";
+        String Rootname=dialog_.RootDirectoryField.getText();
+        boolean issaved=false;
+        
+        if(dialog_.SaveCheckBox.isSelected()){
+            Rootname=dialog_.RootDirectoryField.getText();
+            Filename=dialog_.FileNameField.getText();
+            dialog_.MessageTextArea.setText(Rootname+"\\" +Filename);
+            
+            issaved=true;
+            
+            acq_.setDirName(Filename);
+            acq_.setRootName(Rootname);
+            acq_.setSaveFiles(true);
+            acq_.setComment(dialog_.MessageTextArea.getText());
+            //ss.prefix=Filename;
+            //ss.root=Rootname;
+            //ss.save=true;
+            //ss.comment=dialog_.MessageTextArea.getText();
+        }
+
+//////////  Sample Rotation Configuration  ///////////   
+   String RotPosition=dialog_.AnglePositionField.getText();
+   String RotStep=(String)dialog_.RotationComboBox.getSelectedItem();
+   String Delay_OPT=dialog_.DelayField.getText();
+   long delay_OPT=Long.parseLong(Delay_OPT);
+   if ("DSLM/SPIM".equals(Mode)){     
+        if(dialog_.ShutterRotationCheckBox.isSelected()==true){
+            acq_.keepShutterOpenForChannels(false);
+            //ss.keepShutterOpenChannels=true;
+        }
+        else{acq_.keepShutterOpenForChannels(true);
+        
+            //ss.keepShutterOpenChannels=true;
+        }
+        float RStep=Float.parseFloat(RotStep);// parsedouble(RotStep);
+        positions=1;
+        if (RStep==0){positions=1;}
+        else {positions =(int) ((int) 360/RStep);}
+   } 
+     else if ("Continous".equals(Mode)){     
+        if(dialog_.ShutterRotationCheckBox.isSelected()==true){acq_.keepShutterOpenForChannels(false);}
+        else{acq_.keepShutterOpenForChannels(true);}
+        float RStep=Float.parseFloat(RotStep);// parsedouble(RotStep);
+        positions=1;
+        if (RStep==0){positions=1;}
+        else {positions =(int) ((int) 360/RStep);}
+   } 
+     else if ("OPT".equals(Mode)){
+         dialog_.MessageTextArea.setText("OPT Mode");
+  
+  }
+   
+
+///////////////  Stack Configuration  //////////////////   
+     
+        NumberFormat formatter = new DecimalFormat("#.0000");
+        double ZINI=0;
+        double ZSTEP=0.5;
+        double time=10;
+        
+   if ("DSLM/SPIM".equals(Mode)){
+        double bottom=Double.parseDouble(dialog_.StartField.getText().replaceAll(",", "."));
+        double top=Double.parseDouble(dialog_.EndField.getText().replaceAll(",", "."));
+        double step=Double.parseDouble(dialog_.StepField.getText().replaceAll(",", "."));
+        boolean absolute=true;
+        String ZStep=dialog_.StepField.getText();
+        ZSTEP=Double.parseDouble(ZStep.replaceAll(",", "."));
+        String ZIni=dialog_.StartField.getText();
+        ZINI=Double.parseDouble(ZIni.replaceAll(",", "."));
+        acq_.enableZSliceSetting(false);
+        //ss.slicesFirst=false;
+       
+        if(dialog_.ShutterStackCheckBox.isSelected()==true){acq_.keepShutterOpenForStack(false);
+        //ss.keepShutterOpenSlices=false;
+        }
+        else{
+            acq_.keepShutterOpenForStack(true);
+        //ss.keepShutterOpenSlices=true;
+        }
+        
+        if (dialog_.StackCheckBox.isSelected()){
+            acq_.enableZSliceSetting(true);
+            //ss.slicesFirst=true;
+            acq_.setSlices(bottom,top,step,absolute);
+           // ArrayList a = new ArrayList();
+           // a.set(0, bottom);a.set(1, top);a.set(2, step);a.set(3, absolute);
+           // ss.slices=a;
+                    //ss.
+                                   
+            double aux=(top-bottom)/step;
+            slices=(int)Math.ceil(aux)+1;
+            ZIni=dialog_.StartField.getText();
+            ZINI=Double.parseDouble(ZIni.replaceAll(",", "."));
+        }
+        else{
+            //acq_.setSingleFrame(true);//
+            acq_.enableZSliceSetting(false);
+            //acq_.setSlices(bottom,bottom,step,absolute);
+            slices=1;
+            ZIni=dialog_.PositionField.getText();
+            ZINI=Double.parseDouble(ZIni.replaceAll(",", "."));
+        }   
+   }
+     else if ("Continous".equals(Mode)){
+        double bottom=Double.parseDouble(dialog_.StartField.getText().replaceAll(",", "."));
+        double top=Double.parseDouble(dialog_.EndField.getText().replaceAll(",", "."));
+        double step=Double.parseDouble(dialog_.StepField.getText().replaceAll(",", "."));
+        time=Double.parseDouble(dialog_.TotalTimeField.getText().replaceAll(",", "."));
+        boolean absolute=true;
+        String ZStep=dialog_.StepField.getText();
+        ZSTEP=Double.parseDouble(ZStep.replaceAll(",", "."));
+        String ZIni=dialog_.StartField.getText();
+        ZINI=Double.parseDouble(ZIni.replaceAll(",", "."));
+        acq_.enableZSliceSetting(false);
+       
+        if(dialog_.ShutterStackCheckBox.isSelected()==true){acq_.keepShutterOpenForStack(false);}
+        else{acq_.keepShutterOpenForStack(true);}
+        
+        if (dialog_.StackCheckBox.isSelected()){
+            acq_.enableZSliceSetting(true);
+            acq_.setSlices(bottom,top,step,absolute);
+                                   
+            double aux=(top-bottom)/step;
+            slices=(int)Math.ceil(aux)+1;
+            ZIni=dialog_.StartField.getText();
+            ZINI=Double.parseDouble(ZIni.replaceAll(",", "."));
+        }
+        else{
+            //acq_.setSingleFrame(true);//
+            acq_.enableZSliceSetting(false);
+            //acq_.setSlices(bottom,bottom,step,absolute);
+            slices=1;
+            ZIni=dialog_.PositionField.getText();
+            ZINI=Double.parseDouble(ZIni.replaceAll(",", "."));
+        }   
+   }
+  else if ("OPT".equals(Mode)){
+        if(dialog_.ShutterRotationCheckBox.isSelected()==true){acq_.keepShutterOpenForChannels(false);}
+        else{acq_.keepShutterOpenForChannels(true);}
+        float RStep=Float.parseFloat(RotStep);
+        slices=1;
+        if (RStep==0){slices=1;}
+        else {slices =(int) ((int) 360/RStep);}
+        dialog_.MessageTextArea.setText("Slices are: "+Integer.toString(slices));
+        core_.sleep(2000);
+  }
+
+   
+////////////////  Time Lapse Configuration  ////////////////////   
+        Object numFramesS=dialog_.TimeFrames.getValue();
+        numFrames=((Integer) numFramesS).intValue();
+        double interval=Double.parseDouble(dialog_.IntervalTime.getText());
+        String units=(String)dialog_.IntervalUnits.getSelectedItem();
+        acq_.enableFramesSetting(false);
+        double intervalms=0;
+        
+        if (dialog_.TimeLapseCheckBox.isSelected()){
+            //acq_.setSingleFrame(false);
+            acq_.enableFramesSetting(true);
+           if ("s".equals(units)) {intervalms=interval*1000;}
+           else if ("min".equals(units)) {intervalms=interval*60000;}
+           else if ("ms".equals(units)) {intervalms=interval;}            
+            acq_.setFrames(numFrames,intervalms);
+        }
+        else{
+            numFrames=1;
+            acq_.enableFramesSetting(true);
+            acq_.setFrames(numFrames,interval);
+            //acq_.setSingleFrame(true);
+        }
+                      
+//////////// Channels configuration    /////////////////// 
+       String channelname[] = new String[6];
+       String Excitation[] = new String[6];
+       String Emission[] = new String[6];
+       String Exposure[] = new String[6];
+       String Excitation_filters[]= new String[6];
+       String Emission_filters[]= new String[6];
+       
+       for(int n=0;n<6;n++){
+                Excitation_filters[n]=(String)dialog_.Excitation_ComboBox.getItemAt(n);
+                Emission_filters[n]=(String)dialog_.Emission_ComboBox.getItemAt(n);
+                    }
+        if (dialog_.Channel_CheckBox.isSelected()){
+            channels=0;
+                for(int n=0;n<6;n++){
+                    if(((Boolean)dialog_.Channels_table.getValueAt(n, 4)).booleanValue()==true){                           
+                        channelname[channels]=(String)dialog_.Channels_table.getValueAt(n, 0);
+                        Excitation[channels]=(String)dialog_.Channels_table.getValueAt(n, 1);
+                        Emission[channels]=(String)dialog_.Channels_table.getValueAt(n, 2);                       
+                        Exposure[channels]=(String)dialog_.Channels_table.getValueAt(n, 3);
+                        channels=channels+1;                         
+                    }               
+                }
+            dialog_.MessageTextArea.setText("Number of channels is"+Integer.toString(channels));
+            
+        }
+        else{
+             channels=1;
+             channelname[0] = "Channel_0";
+            try {               
+                Exposure[0]=Double.toString(core_.getExposure());
+            } catch (Exception ex) {
+                dialog_.MessageTextArea.setText("ERROR IN GETTING EXPOSURE");
+                Logger.getLogger(SPIMFLUID_controlsDialog.class.getName()).log(Level.SEVERE, null, ex);
+            }
+             Excitation[0]=(String)dialog_.Excitation_ComboBox.getSelectedItem();
+             Emission[0]=(String)dialog_.Emission_ComboBox.getSelectedItem();            
+        }
+   
+          
+            
+    ////////////////  ACQUISITION IN Continous Mode //////////////////                  
+    if ("Continous".equals(Mode)){
+            try {
+                boolean isshown=true; 
+                app_.openAcquisition(Filename, Rootname, numFrames, channels, slices, positions, isshown, issaved);
+
+   /////////////////////  RENAME CHANNELS  //////////////////
+                
+        int[] Excitation_Filters_Index={0,0,0,0,0,0};
+        int[] Emission_Filters_Index={0,0,0,0,0,0};
+               for(int n=0;n<channels;n++){                     
+                        app_.setChannelName(Filename, n, channelname[n]);
+                                                  
+                     for(int m=0;m<6;m++){
+                                if(Excitation_filters[m].equalsIgnoreCase(Excitation[n])){
+                                    Excitation_Filters_Index[n]=m;
+                                }
+                                 if(Emission_filters[m].equalsIgnoreCase(Emission[n])){
+                                    Emission_Filters_Index[n]=m;
+                                }
+                       }  
+            }
+
+///// Calculate time  /////
+               
+               
+               
+               
+//////////////////////  ACQUIRE  /////////////////////////////////////
+                
+                
+            //String Pos;
+            //Pos=SC_.setPos(ZIni);
+        try {
+           core_.setProperty(focusdevice,"Velocity (mm/s)",2.8);
+           core_.setProperty(focusdevice,"Set cont position (microns)",ZINI);
+           //core_.setPosition(focusdevice,ZINI);
+           
+           core_.sleep(1000);
+           String Position_new=formatter.format(core_.getPosition(focusdevice));
+           dialog_.PositionField.setText(Position_new);
+        } catch (Exception ex) {
+            Logger.getLogger(SPIMFLUID_controlsDialog.class.getName()).log(Level.SEVERE, null, ex);
+            dialog_.MessageTextArea.setText("ERROR IN GOING TO INITIAL POSITION");
+        }
+            long TIni;
+            long TEnd;
+            long TotalT;
+            long Intervalms=(long)intervalms;
+                         
+       for (int n=0;n<(numFrames);n++){
+                TIni=System.currentTimeMillis();            
+                   if (Global.shutter==0){ShC_.openshutter(); Global.shutter=1;}
+                    for(int m=0;m<(positions);m++){
+                        if (Global.shutter==0){ShC_.openshutter(); Global.shutter=1;}
+                for (int o=0; o<(channels);o++){
+                          //Change filter
+                          String CIEx=FC_.ChangeExcitationFilter(Excitation_Filters_Index[o]);
+                          dialog_.Excitation_ComboBox.setSelectedIndex(Excitation_Filters_Index[o]);
+                          String CIEm=FC_.ChangeEmissionFilter(Emission_Filters_Index[o]);
+                          dialog_.Emission_ComboBox.setSelectedIndex(Emission_Filters_Index[o]);                           
+                         try {
+                            core_.setExposure(Double.parseDouble(Exposure[o]));
+                        } catch (Exception ex) {
+                            dialog_.MessageTextArea.setText("ERROR IN SETTING EXPOSURE");
+                            Logger.getLogger(SPIMFLUID_controlsDialog.class.getName()).log(Level.SEVERE, null, ex);
+                        }
+                          dialog_.MessageTextArea.setText("The filter is: "+Integer.toString(Emission_Filters_Index[o]+1)+"/n"+"The CIEm is: "+ CIEm);
+                          //core_.sleep(1000); 
+                   
+                          double top=Double.parseDouble(dialog_.EndField.getText().replaceAll(",", "."));  
+                          double bottom=Double.parseDouble(dialog_.StartField.getText().replaceAll(",", "."));                           
+                          double Motor_speed=(top-bottom)/(time*1000);
+                          String aux=Double.toString(Motor_speed).replace(".",",");
+                          dialog_.SpeedField.setText(aux);
+                          
+                          core_.setProperty(focusdevice,"Velocity (mm/s)",Motor_speed);
+                          core_.setProperty(focusdevice,"Set cont position (microns)",top);
+                          //core_.setPosition(focusdevice,top);
+                        for(int l=0;l<(slices);l++){
+                            if (dialog_.ShutterStackCheckBox.isSelected()==true){ShC_.openshutter();Global.shutter=1;dialog_.MessageTextArea.setText("shutter ON");}  
+                            else{dialog_.MessageTextArea.setText("shutter OFF");}
+                            if(app_.acquisitionExists(Filename)){
+                                    app_.snapAndAddImage(Filename, n, o, l, m);  //n,m,l
+                            }
+                            else {n=numFrames;m=positions;l=slices;}
+                                if(l!=slices-1){
+                                    if (dialog_.ShutterStackCheckBox.isSelected()==true){ShC_.closeshutter();Global.shutter=0;}
+                                    try {
+                                        double position = core_.getPosition(focusdevice); 
+                                        double position_new=position+ZSTEP;
+                                       
+                                        String Position_new0=Double.toString(position_new).replace(",",".");//
+                                        dialog_.MessageTextArea.setText(Position_new0);
+                                        
+                      ///////////////// END OF THREAD  ///////////
+                                       
+                                       ///position_property="Set position (microns)";
+                                        //DELETER FOR THREAD core_.setProperty(focusdevice,position_property,Position_new0);//
+                                        
+                                        //core_.sleep(50);//
+                                        //core_.setPosition(focusdevice,position_new);
+                                        String Position_new=formatter.format(core_.getPosition(focusdevice));
+                                        dialog_.PositionField.setText(Position_new);
+                                      // app_.setStagePosition(position_new);
+                                        } catch (Exception ex) {
+                                            Logger.getLogger(SPIMFLUID_controlsDialog.class.getName()).log(Level.SEVERE, null, ex);
+                                            dialog_.MessageTextArea.setText("ERROR IN MOVING");
+                                        }
+                                }
+
+                            }
+                        
+                         try {
+                            core_.setProperty(focusdevice,"Velocity (mm/s)",2.8);
+                            core_.setProperty(focusdevice,"Set cont position (microns)",ZINI);
+                            //core_.setPosition(focusdevice,ZINI);
+                            core_.sleep(100);
+                             String Position_new=formatter.format(core_.getPosition(focusdevice));
+                            dialog_.PositionField.setText(Position_new);
+                        } catch (Exception ex) {
+                             Logger.getLogger(SPIMFLUID_controlsDialog.class.getName()).log(Level.SEVERE, null, ex);
+                        }
+                } //channels
+                        if(positions>1){ShC_.openshutter();Global.shutter=1;}
+                       
+                         RotPosition=RC_.leftMove(RotStep,RotPosition);                        
+                        dialog_.AnglePositionField.setText(RotPosition);
+                         if(dialog_.ShutterRotationCheckBox.isSelected()==true){ShC_.closeshutter();Global.shutter=0;}
+                        }
+                    
+                    TEnd=System.currentTimeMillis();
+                    TotalT=TEnd-TIni;
+                    dialog_.MessageTextArea.setText(String.valueOf(TotalT));
+                   if (dialog_.StackCheckBox.isSelected()==true){ShC_.closeshutter();Global.shutter=0;dialog_.MessageTextArea.setText("shutter OFF");}
+                   if (dialog_.ShutterRotationCheckBox.isSelected()==true){ShC_.closeshutter();Global.shutter=0;dialog_.MessageTextArea.setText("shutter OFF");}
+                   else if(dialog_.ShutterRotationCheckBox.isSelected()==false){ShC_.openshutter();Global.shutter=1;dialog_.MessageTextArea.setText("shutter ON");}
+                   if (TotalT<Intervalms && n!=(numFrames-1)){
+                            app_.sleep(Intervalms-TotalT);
+                        }
+                    //wait until
+                   
+                    }
+                ShC_.closeshutter();Global.shutter=0;dialog_.MessageTextArea.setText("shutter OFF");
+                app_.closeAcquisition(Filename);
+                FC_.ChangeExcitationFilter(Excitation_Filters_Index[0]);
+                dialog_.Excitation_ComboBox.setSelectedIndex(Excitation_Filters_Index[0]);
+                FC_.ChangeEmissionFilter(Emission_Filters_Index[0]);
+                dialog_.Emission_ComboBox.setSelectedIndex(Emission_Filters_Index[0]);
+            
+            } catch (Exception ex) {
+                Logger.getLogger(SPIMFLUID_controlsDialog.class.getName()).log(Level.SEVERE, null, ex);
+                dialog_.MessageTextArea.setText("Error in Continous Mode");
+            }
+        }//END IF
+
+        return Mode;
+     }     
+
+String DSLMdualCAM (){   
+         
+        acq_.clear();    
+        
+        app_.closeAllAcquisitions();
+        //acq_.setSaveFiles(false);   
+        acq_.setUpdateLiveWindow(true);
+         
+        int numFrames=1;
+        int slices=1;
+        int channels=1;
+        int positions=1;
+            
+        String focusdevice=core_.getFocusDevice();
+        String xyStage = core_.getXYStageDevice();
+        core_.setAutoShutter(false);
+
+        //////////// This is only to detect the Focus device position property!!!! ///////
+        // IF appears in metadata this can be deleted ////
+       StrVector devicePropertyNames;  
+       String position_property="";
+       NumberFormat formatter2 = new DecimalFormat("#.####");
+        try {
+            devicePropertyNames = core_.getDevicePropertyNames(focusdevice);
+     
+             for(int x=0;x<devicePropertyNames.size();x++){
+                 if (!core_.isPropertyReadOnly(focusdevice, devicePropertyNames.get(x))){
+                //double position = core_.getPosition(focusdevice);
+                String property_value = core_.getProperty(focusdevice, devicePropertyNames.get(x));
+                String Position=formatter2.format(core_.getPosition(focusdevice)).replaceAll(",", ".");
+               if (property_value.compareTo(Position)==0){ position_property=devicePropertyNames.get(x);}
+               dialog_.MessageTextArea.setText(property_value+"  "+Position + devicePropertyNames.get(x));
+              //core_.sleep(5000);                      
+                                       }
+             }      
+           } catch (Exception ex) {
+            Logger.getLogger(SPIMFLUID_controlsDialog.class.getName()).log(Level.SEVERE, null, ex);
+             dialog_.MessageTextArea.setText("Error in device detection");
+        }
+
+
+/////////////// Mode Configuration  /////////////        
+        
+ String Mode=(String) dialog_.ModeComboBox.getSelectedItem();    
+ 
+
+///////////   Save Files Configuration //////////////             
+        String Filename="test";
+        String Rootname=dialog_.RootDirectoryField.getText();
+        boolean issaved=false;
+        
+        if(dialog_.SaveCheckBox.isSelected()){
+            Rootname=dialog_.RootDirectoryField.getText();
+            Filename=dialog_.FileNameField.getText();
+            dialog_.MessageTextArea.setText(Rootname+"\\" +Filename);
+            
+            issaved=true;
+            
+            acq_.setDirName(Filename);
+            acq_.setRootName(Rootname);
+            acq_.setSaveFiles(true);
+            acq_.setComment(dialog_.MessageTextArea.getText());
+        }
+
+//////////  Sample Rotation Configuration  ///////////   
+   String RotPosition=dialog_.AnglePositionField.getText();
+   String RotStep=(String)dialog_.RotationComboBox.getSelectedItem();
+   String Delay_OPT=dialog_.DelayField.getText();
+   long delay_OPT=Long.parseLong(Delay_OPT);
+   
+   if ("DSLM/SPIM".equals(Mode)){     
+        if(dialog_.ShutterRotationCheckBox.isSelected()==true){
+            acq_.keepShutterOpenForChannels(false);
+            //ss.keepShutterOpenChannels=true;
+        }
+        else{acq_.keepShutterOpenForChannels(true);
+        
+            //ss.keepShutterOpenChannels=true;
+        }
+        float RStep=Float.parseFloat(RotStep);// parsedouble(RotStep);
+        positions=1;
+        if (RStep==0){positions=1;}
+        else {positions =(int) ((int) 360/RStep);}
+   } 
+
+   
+
+///////////////  Stack Configuration  //////////////////   
+     
+        NumberFormat formatter = new DecimalFormat("#.0000");
+        double ZINI=0;
+        double ZSTEP=0.5;
+        double time=10;
+        
+   if ("DSLM/SPIM".equals(Mode)){
+        double bottom=Double.parseDouble(dialog_.StartField.getText().replaceAll(",", "."));
+        double top=Double.parseDouble(dialog_.EndField.getText().replaceAll(",", "."));
+        double step=Double.parseDouble(dialog_.StepField.getText().replaceAll(",", "."));
+        boolean absolute=true;
+        String ZStep=dialog_.StepField.getText();
+        ZSTEP=Double.parseDouble(ZStep.replaceAll(",", "."));
+        String ZIni=dialog_.StartField.getText();
+        ZINI=Double.parseDouble(ZIni.replaceAll(",", "."));
+        acq_.enableZSliceSetting(false);
+        //ss.slicesFirst=false;
+       
+        if(dialog_.ShutterStackCheckBox.isSelected()==true){acq_.keepShutterOpenForStack(false);
+        //ss.keepShutterOpenSlices=false;
+        }
+        else{
+            acq_.keepShutterOpenForStack(true);
+        //ss.keepShutterOpenSlices=true;
+        }
+        
+        if (dialog_.StackCheckBox.isSelected()){
+            acq_.enableZSliceSetting(true);
+            //ss.slicesFirst=true;
+            acq_.setSlices(bottom,top,step,absolute);
+           // ArrayList a = new ArrayList();
+           // a.set(0, bottom);a.set(1, top);a.set(2, step);a.set(3, absolute);
+           // ss.slices=a;
+                    //ss.
+                                   
+            double aux=(top-bottom)/step;
+            slices=(int)Math.ceil(aux)+1;
+            ZIni=dialog_.StartField.getText();
+            ZINI=Double.parseDouble(ZIni.replaceAll(",", "."));
+        }
+        else{
+            //acq_.setSingleFrame(true);//
+            acq_.enableZSliceSetting(false);
+            //acq_.setSlices(bottom,bottom,step,absolute);
+            slices=1;
+            ZIni=dialog_.PositionField.getText();
+            ZINI=Double.parseDouble(ZIni.replaceAll(",", "."));
+        }   
+   }
+
+
+
+   
+////////////////  Time Lapse Configuration  ////////////////////   
+        Object numFramesS=dialog_.TimeFrames.getValue();
+        numFrames=((Integer) numFramesS).intValue();
+        double interval=Double.parseDouble(dialog_.IntervalTime.getText());
+        String units=(String)dialog_.IntervalUnits.getSelectedItem();
+        acq_.enableFramesSetting(false);
+        double intervalms=0;
+        
+        if (dialog_.TimeLapseCheckBox.isSelected()){
+            //acq_.setSingleFrame(false);
+            acq_.enableFramesSetting(true);
+           if ("s".equals(units)) {intervalms=interval*1000;}
+           else if ("min".equals(units)) {intervalms=interval*60000;}
+           else if ("ms".equals(units)) {intervalms=interval;}            
+            acq_.setFrames(numFrames,intervalms);
+        }
+        else{
+            numFrames=1;
+            acq_.enableFramesSetting(true);
+            acq_.setFrames(numFrames,interval);
+            //acq_.setSingleFrame(true);
+        }
+                                        
+////////////////  ACQUISITION IN DSLM/SPIM Mode //////////////////                  
+    if ("DSLM/SPIM".equals(Mode)){
+            try {
+                boolean isshown=true; 
+                channels=2;
+                app_.openAcquisition(Filename, Rootname, numFrames, channels, slices, positions, isshown, issaved);
+//                app_.updateButtonsForLiveMode(true);
+   
+          /////////////////////  RENAME CHANNELS  //////////////////
+
+            if (channels!=1){
+                app_.setChannelColor(Filename, 0, Color.red);
+                app_.setChannelColor(Filename, 1, Color.green);
+                app_.setChannelName(Filename, 0, "CAM1Ch");
+                app_.setChannelName(Filename, 1, "CAM2Ch");
+            }
+/////// INITIALIZE ACQUISITION
+        
+int wi = (int) core_.getImageWidth();
+int he = (int)core_.getImageHeight();
+int by = (int)core_.getBytesPerPixel();
+int bi = (int)core_.getImageBitDepth();
+
+app_.initializeAcquisition(Filename, wi, he, by, bi);
+//core_.initializeCircularBuffer();
+
+
+//ImageCache imageCache=acq_.getImageCache();
+//BlockingQueue<TaggedImage> bq= new LinkedBlockingQueue<TaggedImage>(10);
+//DefaultTaggedImageSink sink=new DefaultTaggedImageSink(bq,imageCache);
+//sink.start();
+
+int numImages=numFrames*slices*positions*channels;
+//core_.startSequenceAcquisition("CAM1", numImages, 100, true);
+//core_.startSequenceAcquisition("CAM2", numImages, 0, false);
+
+
+//////////////////////  ACQUIRE  /////////////////////////////////////
+                
+               
+            //String Pos;
+            //Pos=SC_.setPos(ZIni);
+        try {
+           core_.setPosition(focusdevice,ZINI);
+           core_.sleep(100);
+           String Position_new=formatter.format(core_.getPosition(focusdevice));
+           dialog_.PositionField.setText(Position_new);
+        } catch (Exception ex) {
+            Logger.getLogger(SPIMFLUID_controlsDialog.class.getName()).log(Level.SEVERE, null, ex);
+            dialog_.MessageTextArea.setText("ERROR IN GOING TO INITIAL POSITION");
+        }
+            long TIni;
+            long TEnd;
+            long TotalT;
+            long Intervalms=(long)intervalms;
+                       
+       for (int n=0;n<(numFrames);n++){
+                TIni=System.currentTimeMillis();            
+                   if (Global.shutter==0){ShC_.openshutter(); Global.shutter=1;}
+                    for(int m=0;m<(positions);m++){
+                        if (Global.shutter==0){ShC_.openshutter(); Global.shutter=1;}
+
+                          
+                        for(int l=0;l<(slices);l++){
+                            
+                            
+                            if (dialog_.ShutterStackCheckBox.isSelected()==true){ShC_.openshutter();Global.shutter=1;dialog_.MessageTextArea.setText("shutter ON");}  
+                            else{dialog_.MessageTextArea.setText("shutter OFF");}
+                            if(app_.acquisitionExists(Filename)){
+                                   
+                                  
+                            //TaggedImage img =core_.getTaggedImage(o); //core_.popNextTaggedImage();                            
+                            //JSONObject md =img.tags;
+                            //bq.add(img);
+                            //MDUtils.setChannelIndex(md, o);
+                            //MDUtils.setFrameIndex(md, n);              
+                            //MDUtils.setPositionIndex(md, m);
+                            //MDUtils.setSliceIndex(md, l);
+                                        for (int o=0; o<(channels);o++){
+
+                                                try {
+                                                                    if (o==0){
+                                                    core_.setCameraDevice("CAM1");
+                                                    String Cam_name=core_.getCameraDevice();
+                                                    dialog_.MessageTextArea.setText(Cam_name);
+                                                    }
+                                                    else if (o==1){
+                                                                core_.setCameraDevice("CAM2");
+                                                                String Cam_name=core_.getCameraDevice();
+                                                                dialog_.MessageTextArea.setText(Cam_name);
+                                                    }
+                                                //  core_.setExposure(Double.parseDouble(Exposure[o]));
+                                                                    
+                                                    //app_.addImage(Filename, img, n, o, l, m, true);
+                                                    app_.snapAndAddImage(Filename, n, o, l, m);  //n,m,l  
+                                                    
+                                                 
+                                                } catch (Exception ex) {
+                                                    dialog_.MessageTextArea.setText("ERROR IN SETTING EXPOSURE");
+                                                    Logger.getLogger(SPIMFLUID_controlsDialog.class.getName()).log(Level.SEVERE, null, ex);
+                                                }
+                                            } //channels
+                            
+
+                            }
+                            else {n=numFrames;m=positions;l=slices;}
+                                if(l!=slices-1){
+                                    if (dialog_.ShutterStackCheckBox.isSelected()==true){ShC_.closeshutter();Global.shutter=0;}
+                                    try {
+                                        double position = core_.getPosition(focusdevice); 
+                                        double position_new=position+ZSTEP;
+                                       
+                                        String Position_new0=Double.toString(position_new).replace(",",".");//
+                                        dialog_.MessageTextArea.setText(Position_new0);
+                                        
+
+                                       
+                                       ///position_property="Set position (microns)";
+                                        core_.setProperty(focusdevice,position_property,Position_new0);//
+                                        
+                                        //core_.sleep(50);//
+                                        //core_.setPosition(focusdevice,position_new);
+                                        String Position_new=formatter.format(core_.getPosition(focusdevice));
+                                        dialog_.PositionField.setText(Position_new);
+                                      // app_.setStagePosition(position_new);
+                                        } catch (Exception ex) {
+                                            Logger.getLogger(SPIMFLUID_controlsDialog.class.getName()).log(Level.SEVERE, null, ex);
+                                            dialog_.MessageTextArea.setText("ERROR IN MOVING");
+                                        }
+                                }
+
+                            }
+                        
+                         try {
+                            core_.setPosition(focusdevice,ZINI);
+                            core_.sleep(100);
+                             String Position_new=formatter.format(core_.getPosition(focusdevice));
+                            dialog_.PositionField.setText(Position_new);
+                            } catch (Exception ex) {
+                             Logger.getLogger(SPIMFLUID_controlsDialog.class.getName()).log(Level.SEVERE, null, ex);
+                            }
+                
+                        if(positions>1){ShC_.openshutter();Global.shutter=1;}
+                       
+                        RotPosition=RC_.leftMove(RotStep,RotPosition);                        
+                        dialog_.AnglePositionField.setText(RotPosition);
+                         if(dialog_.ShutterRotationCheckBox.isSelected()==true){ShC_.closeshutter();Global.shutter=0;}
+                        }
+                    
+                    TEnd=System.currentTimeMillis();
+                    TotalT=TEnd-TIni;
+                    dialog_.MessageTextArea.setText(String.valueOf(TotalT));
+                   if (dialog_.StackCheckBox.isSelected()==true){ShC_.closeshutter();Global.shutter=0;dialog_.MessageTextArea.setText("shutter OFF");}
+                   if (dialog_.ShutterRotationCheckBox.isSelected()==true){ShC_.closeshutter();Global.shutter=0;dialog_.MessageTextArea.setText("shutter OFF");}
+                   else if(dialog_.ShutterRotationCheckBox.isSelected()==false){ShC_.openshutter();Global.shutter=1;dialog_.MessageTextArea.setText("shutter ON");}
+                   if (TotalT<Intervalms && n!=(numFrames-1)){
+                            app_.sleep(Intervalms-TotalT);
+                        }
+                    //wait until
+                   
+                    }
+                ShC_.closeshutter();Global.shutter=0;dialog_.MessageTextArea.setText("shutter OFF");
+                app_.closeAcquisition(Filename);
+                //core_.stopSequenceAcquisition("CAM1");
+                 //core_.setCameraDevice("DualCAM");
+                
+                
+               // core_.stopSequenceAcquisition("CAM2");
+
+            
+            } catch (Exception ex) {
+                Logger.getLogger(SPIMFLUID_controlsDialog.class.getName()).log(Level.SEVERE, null, ex);
+                dialog_.MessageTextArea.setText("Error in DSLM_Dual int Mode");
+            }
+        }//END IF
+    
+    
+    
+
+        return Mode;
+     }
+     
+String Fluo_Dual (){   
+         
+        //acq_.clear();    
+         acq_.clear();    
+        
+        app_.closeAllAcquisitions();
+        //acq_.setSaveFiles(false);   
+        acq_.setUpdateLiveWindow(true);
+        //acq_.setSaveFiles(false);    
+        
+        //ss.save=false;
+   
+        int numFrames=1;
+        int slices=1;
+        int channels=1;
+        int positions=1;
+            
+        String focusdevice=core_.getFocusDevice();
+        String xyStage = core_.getXYStageDevice();
+        core_.setAutoShutter(false);
+
+        //////////// This is only to detect the Focus device position property!!!! ///////
+        // IF appears in metadata this can be deleted ////
+       StrVector devicePropertyNames;  
+       String position_property="";
+       NumberFormat formatter2 = new DecimalFormat("#.####");
+        try {
+            devicePropertyNames = core_.getDevicePropertyNames(focusdevice);
+     
+             for(int x=0;x<devicePropertyNames.size();x++){
+                 if (!core_.isPropertyReadOnly(focusdevice, devicePropertyNames.get(x))){
+                //double position = core_.getPosition(focusdevice);
+                String property_value = core_.getProperty(focusdevice, devicePropertyNames.get(x));
+                String Position=formatter2.format(core_.getPosition(focusdevice)).replaceAll(",", ".");
+               if (property_value.compareTo(Position)==0){ position_property=devicePropertyNames.get(x);}
+              dialog_.MessageTextArea.setText(property_value+"  "+Position + devicePropertyNames.get(x));
+              //core_.sleep(5000);                      
+                                       }
+             }      
+           } catch (Exception ex) {
+            Logger.getLogger(SPIMFLUID_controlsDialog.class.getName()).log(Level.SEVERE, null, ex);
+             dialog_.MessageTextArea.setText("Error in device detection");
+        }
+
+
+/////////////// Mode Configuration  /////////////        
+        
+ String Mode=(String) dialog_.ModeComboBox.getSelectedItem();    
+ 
+ 
+
+///////////   Save Files Configuration //////////////             
+        String Filename="test";
+        //String Rootname="D:\\DSLM_DATA\\SPIM_V10";
+        String Rootname=dialog_.RootDirectoryField.getText();
+        boolean issaved=false;
+        
+        if(dialog_.SaveCheckBox.isSelected()){
+            Rootname=dialog_.RootDirectoryField.getText();
+            Filename=dialog_.FileNameField.getText();
+            dialog_.MessageTextArea.setText(Rootname+"\\" +Filename);
+            
+            issaved=true;
+            
+            acq_.setDirName(Filename);
+            acq_.setRootName(Rootname);
+            acq_.setSaveFiles(true);
+            acq_.setComment(dialog_.MessageTextArea.getText());
+            //ss.prefix=Filename;
+            //ss.root=Rootname;
+            //ss.save=true;
+            //ss.comment=dialog_.MessageTextArea.getText();
+        }
+
+//////////  Sample Rotation Configuration  ///////////   
+   String RotPosition=dialog_.AnglePositionField.getText();
+   String RotStep=(String)dialog_.RotationComboBox.getSelectedItem();
+   String Delay_OPT=dialog_.DelayField.getText();
+   long delay_OPT=Long.parseLong(Delay_OPT);
+   if ("DSLM/SPIM".equals(Mode)){     
+        if(dialog_.ShutterRotationCheckBox.isSelected()==true){
+            acq_.keepShutterOpenForChannels(false);
+            //ss.keepShutterOpenChannels=true;
+        }
+        else{acq_.keepShutterOpenForChannels(true);
+        
+            //ss.keepShutterOpenChannels=true;
+        }
+        float RStep=Float.parseFloat(RotStep);// parsedouble(RotStep);
+        positions=1;
+        if (RStep==0){positions=1;}
+        else {positions =(int) ((int) 360/RStep);}
+   } 
+     else if ("Continous".equals(Mode)){     
+        if(dialog_.ShutterRotationCheckBox.isSelected()==true){acq_.keepShutterOpenForChannels(false);}
+        else{acq_.keepShutterOpenForChannels(true);}
+        float RStep=Float.parseFloat(RotStep);// parsedouble(RotStep);
+        positions=1;
+        if (RStep==0){positions=1;}
+        else {positions =(int) ((int) 360/RStep);}
+   } 
+     else if ("OPT".equals(Mode)){
+         dialog_.MessageTextArea.setText("OPT Mode"); 
+  }
+       else if ("FLUID".equals(Mode)){
+         dialog_.MessageTextArea.setText("FLUID Mode");
+       }
+///////////////  Stack Configuration  //////////////////   
+     
+        NumberFormat formatter = new DecimalFormat("#.0000");
+        double ZINI=0;
+        double ZSTEP=0.5;
+        double time=10;
+        
+   if ("DSLM/SPIM".equals(Mode)){
+        double bottom=Double.parseDouble(dialog_.StartField.getText().replaceAll(",", "."));
+        double top=Double.parseDouble(dialog_.EndField.getText().replaceAll(",", "."));
+        double step=Double.parseDouble(dialog_.StepField.getText().replaceAll(",", "."));
+        boolean absolute=true;
+        String ZStep=dialog_.StepField.getText();
+        ZSTEP=Double.parseDouble(ZStep.replaceAll(",", "."));
+        String ZIni=dialog_.StartField.getText();
+        ZINI=Double.parseDouble(ZIni.replaceAll(",", "."));
+        acq_.enableZSliceSetting(false);
+        //ss.slicesFirst=false;
+       
+        if(dialog_.ShutterStackCheckBox.isSelected()==true){acq_.keepShutterOpenForStack(false);
+        //ss.keepShutterOpenSlices=false;
+        }
+        else{
+            acq_.keepShutterOpenForStack(true);
+        //ss.keepShutterOpenSlices=true;
+        }
+        
+        if (dialog_.StackCheckBox.isSelected()){
+            acq_.enableZSliceSetting(true);
+            //ss.slicesFirst=true;
+            acq_.setSlices(bottom,top,step,absolute);
+           // ArrayList a = new ArrayList();
+           // a.set(0, bottom);a.set(1, top);a.set(2, step);a.set(3, absolute);
+           // ss.slices=a;
+                    //ss.
+                                   
+            double aux=(top-bottom)/step;
+            slices=(int)Math.ceil(aux)+1;
+            ZIni=dialog_.StartField.getText();
+            ZINI=Double.parseDouble(ZIni.replaceAll(",", "."));
+        }
+        else{
+            //acq_.setSingleFrame(true);//
+            acq_.enableZSliceSetting(false);
+            //acq_.setSlices(bottom,bottom,step,absolute);
+            slices=1;
+            ZIni=dialog_.PositionField.getText();
+            ZINI=Double.parseDouble(ZIni.replaceAll(",", "."));
+        }   
+   }
+     else if ("Continous".equals(Mode)){
+        double bottom=Double.parseDouble(dialog_.StartField.getText().replaceAll(",", "."));
+        double top=Double.parseDouble(dialog_.EndField.getText().replaceAll(",", "."));
+        double step=Double.parseDouble(dialog_.StepField.getText().replaceAll(",", "."));
+        time=Double.parseDouble(dialog_.TotalTimeField.getText().replaceAll(",", "."));
+        boolean absolute=true;
+        String ZStep=dialog_.StepField.getText();
+        ZSTEP=Double.parseDouble(ZStep.replaceAll(",", "."));
+        String ZIni=dialog_.StartField.getText();
+        ZINI=Double.parseDouble(ZIni.replaceAll(",", "."));
+        acq_.enableZSliceSetting(false);
+       
+        if(dialog_.ShutterStackCheckBox.isSelected()==true){acq_.keepShutterOpenForStack(false);}
+        else{acq_.keepShutterOpenForStack(true);}
+        
+        if (dialog_.StackCheckBox.isSelected()){
+            acq_.enableZSliceSetting(true);
+            acq_.setSlices(bottom,top,step,absolute);
+                                   
+            double aux=(top-bottom)/step;
+            slices=(int)Math.ceil(aux)+1;
+            ZIni=dialog_.StartField.getText();
+            ZINI=Double.parseDouble(ZIni.replaceAll(",", "."));
+        }
+        else{
+            //acq_.setSingleFrame(true);//
+            acq_.enableZSliceSetting(false);
+            //acq_.setSlices(bottom,bottom,step,absolute);
+            slices=1;
+            ZIni=dialog_.PositionField.getText();
+            ZINI=Double.parseDouble(ZIni.replaceAll(",", "."));
+        }   
+   }
+     
+     
+  else if ("OPT".equals(Mode)||"FLUID".equals(Mode)){
+        if(dialog_.ShutterRotationCheckBox.isSelected()==true){acq_.keepShutterOpenForChannels(false);}
+        else{acq_.keepShutterOpenForChannels(true);}
+        float RStep=Float.parseFloat(RotStep);
+        slices=1;
+        if (RStep==0){slices=1;}
+        else {slices =(int) ((int) 360/RStep);}
+        dialog_.MessageTextArea.setText("Slices are: "+Integer.toString(slices));
+        core_.sleep(2000);
+  }
+
+   
+////////////////  Time Lapse Configuration  ////////////////////   
+        Object numFramesS=dialog_.TimeFrames.getValue();
+        numFrames=((Integer) numFramesS).intValue();
+        double interval=Double.parseDouble(dialog_.IntervalTime.getText());
+        String units=(String)dialog_.IntervalUnits.getSelectedItem();
+        acq_.enableFramesSetting(false);
+        double intervalms=0;
+        
+        if (dialog_.TimeLapseCheckBox.isSelected()){
+            //acq_.setSingleFrame(false);
+            acq_.enableFramesSetting(true);
+           if ("s".equals(units)) {intervalms=interval*1000;}
+           else if ("min".equals(units)) {intervalms=interval*60000;}
+           else if ("ms".equals(units)) {intervalms=interval;}            
+            acq_.setFrames(numFrames,intervalms);
+        }
+        else{
+            numFrames=1;
+            acq_.enableFramesSetting(true);
+            acq_.setFrames(numFrames,interval);
+            //acq_.setSingleFrame(true);
+        }
+                      
+
+   
+                  
+////////////////  ACQUISITION IN OPT Mode (Slices are angles)  //////////////////   
+ if("FLUID".equals(Mode)){
+          try {
+                boolean isshown=true; //slices, positions      
+                channels=2;
+                app_.openAcquisition(Filename, Rootname, numFrames, channels, slices, isshown, issaved);
+                
+//                                app_.updateButtonsForLiveMode(true);
+   
+          /////////////////////  RENAME CHANNELS  //////////////////
+
+            if (channels!=1){
+                app_.setChannelColor(Filename, 0, Color.red);
+                app_.setChannelColor(Filename, 1, Color.green);
+                app_.setChannelName(Filename, 0, "CAM1Ch");
+                app_.setChannelName(Filename, 1, "CAM2Ch");
+            }
+            /////// INITIALIZE ACQUISITION
+
+            int wi = (int) core_.getImageWidth();
+            int he = (int)core_.getImageHeight();
+            int by = (int)core_.getBytesPerPixel();
+            int bi = (int)core_.getImageBitDepth();
+
+            app_.initializeAcquisition(Filename, wi, he, by, bi);
+
+
+            long TIni;
+            long TEnd;
+            long TotalT;
+            long Intervalms=(long)intervalms;
+
+//////////////////////  ACQUIRE  /////////////////////////////////////
+
+           for (int n=0;n<(numFrames);n++){
+                TIni=System.currentTimeMillis();     
+                        ShC_.openshutter();    
+                        Global.shutter=1;
+                    
+                        for(int l=0;l<(slices);l++){
+                           
+                            for (int o=0; o<(channels);o++){
+                                   
+                                                try {
+                                                                    if (o==0){
+                                                    core_.setCameraDevice("CAM1");
+                                                    String Cam_name=core_.getCameraDevice();
+                                                    dialog_.MessageTextArea.setText(Cam_name);
+                                                    }
+                                                    else if (o==1){
+                                                                core_.setCameraDevice("CAM2");
+                                                                String Cam_name=core_.getCameraDevice();
+                                                                dialog_.MessageTextArea.setText(Cam_name);
+                                                    }
+                                                //  core_.setExposure(Double.parseDouble(Exposure[o]));
+                                                                    
+                                                    //app_.addImage(Filename, img, n, o, l, m, true);
+                                                    //app_.snapAndAddImage(Filename, n, o, l, m);  //n,m,l  
+                                                 
+                                                } catch (Exception ex) {
+                                                    dialog_.MessageTextArea.setText("ERROR IN SETTING EXPOSURE");
+                                                    Logger.getLogger(SPIMFLUID_controlsDialog.class.getName()).log(Level.SEVERE, null, ex);
+                                                }                                
+                                
+                               /* try {
+                                        core_.setExposure(Double.parseDouble(Exposure[o]));
+                                    } catch (Exception ex) {
+                                        dialog_.MessageTextArea.setText("ERROR IN SETTING EXPOSURE");
+                                        Logger.getLogger(SPIMFLUID_controlsDialog.class.getName()).log(Level.SEVERE, null, ex);
+                                    }*/
+                                
+                               
+                            
+                            if(app_.acquisitionExists(Filename)){
+                                    app_.sleep(delay_OPT); //variable delay in acquisition
+                                    //app_.snapAndAddImage(Filename, n, o, l);  //n,m,l    
+                                    int mm=0;
+                                    app_.snapAndAddImage(Filename, n, o, l, mm);
+                            }
+                            else {n=numFrames;l=slices;}
+                                if(l!=slices-1){
+                                    //Pos=SC_.setPosUp(Pos,ZStep);                                       
+                                }                                
+                            
+                            
+                            
+                            
+                            }//channels
+                         
+                            RotPosition=RC_.rightMove(RotStep,RotPosition);                   
+                            dialog_.AnglePositionField.setText(RotPosition);
+                    }//slices
+                                     
+                    TEnd=System.currentTimeMillis();
+                    TotalT=TEnd-TIni;
+                    //dialog_.MessageTextArea.setText(String.valueOf(TotalT));
+                   
+                   if (TotalT<Intervalms && n!=(numFrames-1)){
+                            app_.sleep(Intervalms-TotalT);
+                        }
+                    //wait until
+                    ShC_.closeshutter(); 
+                    Global.shutter=0;  
+                    }//Frames
+
+                
+            app_.closeAcquisition(Filename);
+                    
+           } catch (Exception ex) {
+                Logger.getLogger(SPIMFLUID_controlsDialog.class.getName()).log(Level.SEVERE, null, ex);
+                dialog_.MessageTextArea.setText("Error in FLUID Mode");
+            }           
+        }//END ELSE
+        return Mode;
+     }
+
+
+String TEST (){
+    
+    /////////////// Mode Configuration  /////////////        
+        
+ String Mode=(String) dialog_.ModeComboBox.getSelectedItem(); 
+ 
+ ///////////   Save Files Configuration //////////////             
+        String Filename="test";
+        String Rootname=dialog_.RootDirectoryField.getText();
+        boolean issaved=false;
+        
+        if(dialog_.SaveCheckBox.isSelected()){
+            Rootname=dialog_.RootDirectoryField.getText();
+            Filename=dialog_.FileNameField.getText();
+            dialog_.MessageTextArea.setText(Rootname+"\\" +Filename);
+            
+            issaved=true;
+            
+            acq_.setDirName(Filename);
+            acq_.setRootName(Rootname);
+            acq_.setSaveFiles(true);
+            acq_.setComment(dialog_.MessageTextArea.getText());
+        }
+        
+////////////////  Time Lapse Configuration  ////////////////////   
+        Object numFramesS=dialog_.TimeFrames.getValue();
+       int numFrames=((Integer) numFramesS).intValue();
+        double interval=Double.parseDouble(dialog_.IntervalTime.getText());
+        String units=(String)dialog_.IntervalUnits.getSelectedItem();
+        acq_.enableFramesSetting(false);
+        double intervalms=0;
+        
+        if (dialog_.TimeLapseCheckBox.isSelected()){
+            //acq_.setSingleFrame(false);
+            acq_.enableFramesSetting(true);
+           if ("s".equals(units)) {intervalms=interval*1000;}
+           else if ("min".equals(units)) {intervalms=interval*60000;}
+           else if ("ms".equals(units)) {intervalms=interval;}            
+            acq_.setFrames(numFrames,intervalms);
+        }
+        else{
+            numFrames=1;
+            acq_.enableFramesSetting(true);
+            acq_.setFrames(numFrames,interval);
+            //acq_.setSingleFrame(true);
+        }
+
+
+String c1 = "CAM1";
+String c2 = "CAM2";
+//int nrFrames = 330;
+int intervals = (int) intervalms;
+
+app_.closeAllAcquisitions();
+/*import org.json.JSONObject;
+import org.micromanager.utils.MDUtils;
+import org.micromanager.utils.NumberUtils;
+String basedir = "Z:/Images/20110318/";
+String ac = "tl";
+
+bdir = new File(basedir);
+if (!bdir.canWrite())
+	bdir.mkdirs();
+String acq = new String (ac);
+int t = 1;
+while ( (new File(basedir + System.getProperty("file.separator") + acq)).exists()) {
+	acq = new String (ac + "-" + t);
+	t++;
+}
+*/
+try{
+    
+                        app_.openAcquisition(Filename, Rootname, numFrames, 2, 1, 1, true, issaved);
+                        app_.setChannelColor(Filename, 0, Color.RED);
+                        app_.setChannelColor(Filename, 1, Color.GREEN);
+                        app_.setChannelName(Filename, 0, c1);
+                        app_.setChannelName(Filename, 1, c2);
+
+                        int w = (int) core_.getImageWidth();
+                        int h = (int) core_.getImageHeight();
+                        int d =(int)  core_.getBytesPerPixel();
+                        int b =(int)  core_.getImageBitDepth();
+                        int [] frameNr  = new int [] {0, 0};
+
+                        app_.initializeAcquisition(Filename, w, h, d, b);
+
+
+                        for (int f = 0; f < numFrames; f++) {
+                                        // delete previous content of circular buffer
+                                        core_.initializeCircularBuffer();
+                                        //mmc.prepareSequenceAcquisition(c1);
+                                        //mmc.prepareSequenceAcquisition(c2);
+                                        core_.startSequenceAcquisition(c2, 1, 0, false);
+
+                                        app_.sleep(5);
+                                        core_.startSequenceAcquisition(c1, 1, 0, false);
+                                        app_.sleep(5);
+                                        while (core_.isSequenceRunning() || core_.getRemainingImageCount() > 0) {
+                                                if (core_.getRemainingImageCount() > 0) {
+                                                        TaggedImage img = core_.popNextTaggedImage();
+                                                        JSONObject md = img.tags;
+                                                        MDUtils.setFrameIndex(md, f);
+                                                        MDUtils.setSliceIndex(md, 0);
+                                                        MDUtils.setPositionIndex(md, 0);
+
+                                                        //int posIndex = (x % nrXPositions_) + (y * nrXPositions_);
+                                                        //int posIndex = (y % nrYPositions_) + (x * nrYPositions_);
+                                                        //MDUtils.setPositionIndex(0);
+                                                        // TODO: use MDUtils.setPositionName instead
+                                                        //md.put ("PositionName", "Pos" + posIndex);
+                                                        Object cName = md.get("Camera");
+
+                                                        if (c1.equals(cName))
+                                                                MDUtils.setChannelIndex(md, 0);
+                                                        else
+                                                                MDUtils.setChannelIndex(md, 1);
+                                                        app_.addImage(Filename, img,true, true);                                                       
+                                                }
+                                        }
+                                        if (f == 0) {
+                                                //gui.setContrastBasedOnFrame(acq,f,0);
+                                        }
+                                        app_.sleep(intervals);
+                        }
+ 
+             } catch (Exception ex) {
+                Logger.getLogger(SPIMFLUID_controlsDialog.class.getName()).log(Level.SEVERE, null, ex);
+                dialog_.MessageTextArea.setText("Error in DSLM_Dual int Mode");
+            }
+    return Mode;
+}
+
+
+}
